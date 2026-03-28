@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Harness</title>
+  <style>
+    /* ------------------------------------------------------------------ */
+    /* Reset & base                                                         */
+    /* ------------------------------------------------------------------ */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --border:   #2c2f3f;
+      --accent:   #5b8df6;
+      --accent-h: #7aa4ff;
+      --text:     #e2e4f0;
+      --text-dim: #7a7f9a;
+      --success:  #4caf7d;
+      --warn:     #e0a240;
+      --danger:   #e05555;
+      --radius:   8px;
+      --font: "Segoe UI", system-ui, sans-serif;
+    }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Top nav                                                              */
+    /* ------------------------------------------------------------------ */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+      height: 52px;
+    }
+    header h1 { font-size: 1.05rem; font-weight: 600; color: var(--accent); }
+    nav a {
+      color: var(--text-dim);
+      text-decoration: none;
+      font-size: 0.9rem;
+      padding: 4px 8px;
+      border-radius: var(--radius);
+      transition: color .15s, background .15s;
+    }
+    nav a.active, nav a:hover {
+      color: var(--text);
+      background: rgba(91,141,246,.12);
+    }
+    .spacer { flex: 1; }
+
+    /* ------------------------------------------------------------------ */
+    /* Views (SPA routing via data-view)                                   */
+    /* ------------------------------------------------------------------ */
+    main { padding: 1.5rem; }
+    [data-view] { display: none; }
+    [data-view].active { display: block; }
+
+    /* ------------------------------------------------------------------ */
+    /* Cards / panels                                                       */
+    /* ------------------------------------------------------------------ */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem;
+    }
+    .card + .card { margin-top: 1rem; }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: .75rem;
+    }
+    .card-title { font-size: 1rem; font-weight: 600; }
+    .card-meta { font-size: .8rem; color: var(--text-dim); }
+
+    /* ------------------------------------------------------------------ */
+    /* Buttons                                                              */
+    /* ------------------------------------------------------------------ */
+    button {
+      cursor: pointer;
+      border: none;
+      border-radius: var(--radius);
+      padding: .45rem .9rem;
+      font-size: .85rem;
+      font-family: var(--font);
+      transition: opacity .15s, background .15s;
+    }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+
+    .btn-primary   { background: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-h); }
+
+    .btn-secondary { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+    .btn-secondary:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+
+    .btn-danger    { background: var(--danger); color: #fff; }
+    .btn-small     { padding: .3rem .65rem; font-size: .78rem; }
+
+    /* ------------------------------------------------------------------ */
+    /* Status badge                                                         */
+    /* ------------------------------------------------------------------ */
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: .72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .badge-planning   { background: rgba(91,141,246,.2); color: var(--accent); }
+    .badge-executing  { background: rgba(224,162,64,.2); color: var(--warn); }
+    .badge-completed  { background: rgba(76,175,125,.2); color: var(--success); }
+    .badge-halted     { background: rgba(224,85,85,.2); color: var(--danger); }
+    .badge-failed     { background: rgba(224,85,85,.2); color: var(--danger); }
+    .badge-paused     { background: rgba(122,127,154,.2); color: var(--text-dim); }
+    .badge-unknown    { background: rgba(122,127,154,.2); color: var(--text-dim); }
+    .badge-accepted   { background: rgba(91,141,246,.2); color: var(--accent); }
+
+    /* ------------------------------------------------------------------ */
+    /* Grid layout for project list                                         */
+    /* ------------------------------------------------------------------ */
+    #project-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+
+    .project-card { cursor: default; }
+    .project-card .project-name { font-size: 1.05rem; font-weight: 600; }
+    .project-card .project-model { font-size: .8rem; color: var(--text-dim); margin-top: 2px; }
+    .project-actions { margin-top: .9rem; display: flex; gap: .5rem; }
+
+    /* ------------------------------------------------------------------ */
+    /* Run list                                                             */
+    /* ------------------------------------------------------------------ */
+    #runs-list { margin-top: 1rem; }
+    .run-row {
+      display: grid;
+      grid-template-columns: 1fr auto auto auto;
+      align-items: center;
+      gap: 1rem;
+      padding: .6rem .75rem;
+      border-radius: var(--radius);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      margin-bottom: .5rem;
+    }
+    .run-id   { font-family: monospace; font-size: .85rem; }
+    .run-meta { font-size: .78rem; color: var(--text-dim); }
+
+    /* ------------------------------------------------------------------ */
+    /* Run monitor panels                                                   */
+    /* ------------------------------------------------------------------ */
+    #monitor-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: .75rem;
+      margin-bottom: 1rem;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+      text-align: center;
+    }
+    .stat-label { font-size: .75rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
+    .stat-value { font-size: 1.6rem; font-weight: 700; margin-top: .2rem; }
+    .stat-sub   { font-size: .75rem; color: var(--text-dim); margin-top: .1rem; }
+
+    /* ------------------------------------------------------------------ */
+    /* Configurator chat                                                    */
+    /* ------------------------------------------------------------------ */
+    #chat-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      height: 320px;
+      overflow-y: auto;
+      padding: .75rem 1rem;
+      margin-bottom: .75rem;
+      font-size: .9rem;
+      line-height: 1.5;
+    }
+    .chat-msg          { margin-bottom: .4rem; }
+    .chat-msg.user     { color: var(--accent); }
+    .chat-msg.agent    { color: var(--text); }
+    .chat-msg.system   { color: var(--text-dim); font-style: italic; }
+    .chat-msg.done     { color: var(--success); font-weight: 600; }
+    .chat-msg.error    { color: var(--danger); }
+
+    #chat-input-row { display: flex; gap: .5rem; }
+    #chat-input {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: .9rem;
+      padding: .5rem .75rem;
+      outline: none;
+    }
+    #chat-input:focus { border-color: var(--accent); }
+
+    /* ------------------------------------------------------------------ */
+    /* Form helpers                                                         */
+    /* ------------------------------------------------------------------ */
+    .form-row { display: flex; gap: .75rem; align-items: flex-end; margin-top: .75rem; }
+    .form-group { display: flex; flex-direction: column; gap: .3rem; }
+    .form-group label { font-size: .8rem; color: var(--text-dim); }
+    .form-group input, .form-group textarea {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: .88rem;
+      padding: .45rem .7rem;
+      outline: none;
+    }
+    .form-group input:focus, .form-group textarea:focus { border-color: var(--accent); }
+
+    /* ------------------------------------------------------------------ */
+    /* Misc                                                                 */
+    /* ------------------------------------------------------------------ */
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: .5rem;
+    }
+    .section-title { font-size: 1.1rem; font-weight: 600; }
+    .empty-state { color: var(--text-dim); font-size: .9rem; padding: 2rem 0; text-align: center; }
+    .spinner { animation: spin 1s linear infinite; display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #back-btn { font-size: .85rem; }
+    .breadcrumb { font-size: .85rem; color: var(--text-dim); margin-bottom: 1rem; }
+    .breadcrumb span { color: var(--text); }
+
+    #toast {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: .6rem 1rem;
+      font-size: .85rem;
+      opacity: 0;
+      transition: opacity .2s;
+      pointer-events: none;
+      max-width: 320px;
+    }
+    #toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Agent Harness</h1>
+  <nav>
+    <a href="#" data-nav="projects" class="active">Projects</a>
+    <a href="#" data-nav="configure">Configure</a>
+  </nav>
+  <div class="spacer"></div>
+  <span id="status-indicator" style="font-size:.78rem;color:var(--text-dim);"></span>
+</header>
+
+<main>
+
+  <!-- ============================================================ -->
+  <!-- VIEW: Projects                                                -->
+  <!-- ============================================================ -->
+  <div data-view="projects" class="active">
+    <div class="section-header">
+      <span class="section-title">Projects</span>
+      <button class="btn-primary" id="new-project-btn">+ New Project</button>
+    </div>
+    <div id="project-grid">
+      <div class="empty-state">Loading projects...</div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- VIEW: Runs list                                               -->
+  <!-- ============================================================ -->
+  <div data-view="runs">
+    <div class="breadcrumb">Projects &rsaquo; <span id="runs-project-name"></span></div>
+    <div class="section-header">
+      <span class="section-title">Runs</span>
+      <button class="btn-primary btn-small" id="start-run-btn">+ Start Run</button>
+    </div>
+
+    <!-- Inline start-run form (hidden by default) -->
+    <div id="start-run-form" style="display:none;" class="card" style="margin-bottom:.75rem;">
+      <div class="card-title" style="margin-bottom:.75rem;">Start New Run</div>
+      <div class="form-group">
+        <label for="task-input">Task description</label>
+        <textarea id="task-input" rows="3" placeholder="Describe what you want the agent to build or do..."></textarea>
+      </div>
+      <div class="form-row">
+        <button class="btn-primary" id="submit-run-btn">Start</button>
+        <button class="btn-secondary" id="cancel-run-btn">Cancel</button>
+      </div>
+    </div>
+
+    <div id="runs-list">
+      <div class="empty-state">No runs yet.</div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- VIEW: Run monitor                                             -->
+  <!-- ============================================================ -->
+  <div data-view="monitor">
+    <div class="breadcrumb">
+      Projects &rsaquo; <span id="monitor-project-name"></span>
+      &rsaquo; <span id="monitor-run-id"></span>
+    </div>
+
+    <div id="monitor-grid">
+      <div class="stat-card">
+        <div class="stat-label">Status</div>
+        <div class="stat-value" id="mon-status">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Current Phase</div>
+        <div class="stat-value" id="mon-phase" style="font-size:1.1rem;word-break:break-all;">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Tasks</div>
+        <div class="stat-value" id="mon-tasks">—</div>
+        <div class="stat-sub">completed / total</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Spend</div>
+        <div class="stat-value" id="mon-spend">$0.00</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Iterations</div>
+        <div class="stat-value" id="mon-iters">—</div>
+        <div class="stat-sub">on current task</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Run State Details</span>
+        <button class="btn-secondary btn-small" id="refresh-btn">Refresh</button>
+      </div>
+      <pre id="state-json" style="font-size:.78rem;color:var(--text-dim);white-space:pre-wrap;word-break:break-all;max-height:320px;overflow-y:auto;"></pre>
+    </div>
+
+    <div style="margin-top:.75rem;">
+      <button class="btn-secondary btn-small" id="back-to-runs-btn">Back to Runs</button>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- VIEW: Configure (WebSocket chat)                             -->
+  <!-- ============================================================ -->
+  <div data-view="configure">
+    <div class="section-header">
+      <span class="section-title">AI Project Configurator</span>
+    </div>
+    <p style="color:var(--text-dim);font-size:.88rem;margin-bottom:.75rem;">
+      Describe your project and the AI will generate a full harness configuration for you.
+    </p>
+
+    <div id="chat-box">
+      <div class="chat-msg system">Describe your project to get started. Press Enter or click Send.</div>
+    </div>
+
+    <div id="chat-input-row">
+      <input
+        type="text"
+        id="chat-input"
+        placeholder="e.g. Build a REST API for a todo app using FastAPI and SQLite"
+        autocomplete="off"
+      />
+      <button class="btn-primary" id="chat-send-btn">Send</button>
+      <button class="btn-secondary" id="chat-reset-btn">Reset</button>
+    </div>
+  </div>
+
+</main>
+
+<div id="toast"></div>
+
+<script>
+// ==========================================================================
+// Minimal SPA router + Agent Harness UI
+// ==========================================================================
+
+// --------------------------------------------------------------------------
+// Utilities
+// --------------------------------------------------------------------------
+
+function $(sel, ctx) { return (ctx || document).querySelector(sel); }
+function $$(sel, ctx) { return [...(ctx || document).querySelectorAll(sel)]; }
+
+function showView(name) {
+  $$('[data-view]').forEach(el => el.classList.toggle('active', el.dataset.view === name));
+  $$('[data-nav]').forEach(a => a.classList.toggle('active', a.dataset.nav === name));
+}
+
+function badge(status) {
+  const cls = `badge badge-${(status || 'unknown').toLowerCase()}`;
+  return `<span class="${cls}">${status || 'unknown'}</span>`;
+}
+
+let _toastTimer = null;
+function toast(msg, ms = 3000) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), ms);
+}
+
+// --------------------------------------------------------------------------
+// Navigation
+// --------------------------------------------------------------------------
+
+$$('[data-nav]').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    const view = a.dataset.nav;
+    showView(view);
+    if (view === 'projects') loadProjects();
+  });
+});
+
+// --------------------------------------------------------------------------
+// State
+// --------------------------------------------------------------------------
+
+let currentProject = null;
+let currentRunId   = null;
+let pollInterval   = null;
+
+// --------------------------------------------------------------------------
+// VIEW: Projects
+// --------------------------------------------------------------------------
+
+async function loadProjects() {
+  const grid = $('#project-grid');
+  grid.innerHTML = '<div class="empty-state"><span class="spinner">&#x21bb;</span> Loading...</div>';
+
+  try {
+    const res = await fetch('/api/projects');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const projects = await res.json();
+
+    if (!projects.length) {
+      grid.innerHTML = '<div class="empty-state">No projects yet. Create one!</div>';
+      return;
+    }
+
+    grid.innerHTML = projects.map(p => `
+      <div class="card project-card">
+        <div class="project-name">${esc(p.name)}</div>
+        <div class="project-model">${esc(p.config.model || 'default model')}</div>
+        <div class="project-model">${p.runs_count} run(s)</div>
+        <div class="project-actions">
+          <button class="btn-secondary btn-small" onclick="openRuns('${esc(p.name)}')">Runs</button>
+          <button class="btn-primary btn-small" onclick="openNewRunFor('${esc(p.name)}')">Run</button>
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    grid.innerHTML = `<div class="empty-state" style="color:var(--danger)">Failed to load projects: ${esc(String(err))}</div>`;
+  }
+}
+
+$('#new-project-btn').addEventListener('click', () => {
+  showView('configure');
+  $$('[data-nav]').forEach(a => a.classList.toggle('active', a.dataset.nav === 'configure'));
+});
+
+// --------------------------------------------------------------------------
+// VIEW: Runs
+// --------------------------------------------------------------------------
+
+async function openRuns(projectName) {
+  currentProject = projectName;
+  $('#runs-project-name').textContent = projectName;
+  showView('runs');
+  $('#start-run-form').style.display = 'none';
+  await loadRuns();
+}
+
+async function loadRuns() {
+  const list = $('#runs-list');
+  list.innerHTML = '<div class="empty-state"><span class="spinner">&#x21bb;</span> Loading...</div>';
+
+  try {
+    const res = await fetch(`/api/projects/${enc(currentProject)}/runs`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const runs = await res.json();
+
+    if (!runs.length) {
+      list.innerHTML = '<div class="empty-state">No runs yet. Start one above!</div>';
+      return;
+    }
+
+    list.innerHTML = runs.reverse().map(r => `
+      <div class="run-row">
+        <div>
+          <div class="run-id">${esc(r.run_id)}</div>
+          <div class="run-meta">${esc(r.current_phase || '—')}</div>
+        </div>
+        <div>${badge(r.status)}</div>
+        <div class="run-meta">
+          ${r.completed_tasks}/${r.total_tasks} tasks &bull; $${(r.cumulative_spend_usd || 0).toFixed(4)}
+        </div>
+        <button class="btn-secondary btn-small" onclick="openMonitor('${esc(currentProject)}','${esc(r.run_id)}')">Monitor</button>
+      </div>
+    `).join('');
+  } catch (err) {
+    list.innerHTML = `<div class="empty-state" style="color:var(--danger)">Failed to load runs: ${esc(String(err))}</div>`;
+  }
+}
+
+$('#start-run-btn').addEventListener('click', () => {
+  $('#start-run-form').style.display = '';
+  $('#task-input').focus();
+});
+
+$('#cancel-run-btn').addEventListener('click', () => {
+  $('#start-run-form').style.display = 'none';
+  $('#task-input').value = '';
+});
+
+$('#submit-run-btn').addEventListener('click', async () => {
+  const task = $('#task-input').value.trim();
+  if (!task) { toast('Please enter a task description.'); return; }
+
+  const btn = $('#submit-run-btn');
+  btn.disabled = true;
+  btn.textContent = 'Starting...';
+
+  try {
+    const res = await fetch(`/api/projects/${enc(currentProject)}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+
+    toast(`Run ${data.run_id} started!`);
+    $('#start-run-form').style.display = 'none';
+    $('#task-input').value = '';
+    await loadRuns();
+  } catch (err) {
+    toast(`Error: ${err.message}`, 5000);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Start';
+  }
+});
+
+function openNewRunFor(projectName) {
+  openRuns(projectName).then(() => {
+    $('#start-run-form').style.display = '';
+    $('#task-input').focus();
+  });
+}
+
+// --------------------------------------------------------------------------
+// VIEW: Run Monitor
+// --------------------------------------------------------------------------
+
+async function openMonitor(projectName, runId) {
+  currentProject = projectName;
+  currentRunId   = runId;
+
+  $('#monitor-project-name').textContent = projectName;
+  $('#monitor-run-id').textContent       = runId;
+
+  showView('monitor');
+  await refreshMonitor();
+
+  // Poll only if run is in a non-terminal state
+  clearInterval(pollInterval);
+  pollInterval = setInterval(async () => {
+    const state = await getRunState();
+    if (!state) return;
+    renderMonitor(state);
+    const terminal = ['completed', 'halted', 'failed'];
+    if (terminal.includes((state.status || '').toLowerCase())) {
+      clearInterval(pollInterval);
+    }
+  }, 3000);
+}
+
+async function getRunState() {
+  try {
+    const res = await fetch(`/api/projects/${enc(currentProject)}/runs/${enc(currentRunId)}/state`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch { return null; }
+}
+
+function renderMonitor(state) {
+  $('#mon-status').innerHTML  = badge(state.status);
+  $('#mon-phase').textContent  = state.current_phase || '—';
+  $('#mon-tasks').textContent  = `${(state.completed_task_ids || []).length} / ${state.total_tasks || 0}`;
+  $('#mon-spend').textContent  = `$${(state.cumulative_spend_usd || 0).toFixed(4)}`;
+  $('#mon-iters').textContent  = state.iterations_on_current_task ?? '—';
+  $('#state-json').textContent = JSON.stringify(state, null, 2);
+}
+
+async function refreshMonitor() {
+  const state = await getRunState();
+  if (state) {
+    renderMonitor(state);
+  } else {
+    $('#state-json').textContent = '(no state yet — run may still be initializing)';
+  }
+}
+
+$('#refresh-btn').addEventListener('click', refreshMonitor);
+
+$('#back-to-runs-btn').addEventListener('click', () => {
+  clearInterval(pollInterval);
+  openRuns(currentProject);
+});
+
+// --------------------------------------------------------------------------
+// VIEW: Configurator (WebSocket chat)
+// --------------------------------------------------------------------------
+
+let ws = null;
+
+function chatAppend(text, type = 'agent') {
+  const box = $('#chat-box');
+  const div = document.createElement('div');
+  div.className = `chat-msg ${type}`;
+  div.textContent = text;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+function startConfigure(description) {
+  if (!description.trim()) return;
+
+  // Connect WebSocket
+  const wsUrl = `ws://${location.host}/ws/configure`;
+  if (ws && ws.readyState < 2) ws.close();
+
+  chatAppend(description, 'user');
+  chatAppend('Connecting to AI configurator...', 'system');
+
+  ws = new WebSocket(wsUrl);
+
+  ws.addEventListener('open', () => {
+    ws.send(JSON.stringify({ type: 'configure', description }));
+  });
+
+  ws.addEventListener('message', e => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'message') {
+        chatAppend(msg.text, 'agent');
+      } else if (msg.type === 'done') {
+        chatAppend(`Project '${msg.project_name}' created successfully!`, 'done');
+        // Refresh project list in background
+        loadProjects();
+      } else if (msg.type === 'error') {
+        chatAppend(`Error: ${msg.text}`, 'error');
+      }
+    } catch {
+      chatAppend(e.data, 'agent');
+    }
+  });
+
+  ws.addEventListener('error', () => {
+    chatAppend('WebSocket error. Is the server running?', 'error');
+  });
+
+  ws.addEventListener('close', () => {
+    chatAppend('Session closed.', 'system');
+    ws = null;
+  });
+}
+
+$('#chat-send-btn').addEventListener('click', () => {
+  const input = $('#chat-input');
+  const text  = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  startConfigure(text);
+  $('#chat-send-btn').disabled = true;
+  setTimeout(() => { $('#chat-send-btn').disabled = false; }, 2000);
+});
+
+$('#chat-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('#chat-send-btn').click();
+});
+
+$('#chat-reset-btn').addEventListener('click', () => {
+  if (ws) ws.close();
+  $('#chat-box').innerHTML = '<div class="chat-msg system">Describe your project to get started. Press Enter or click Send.</div>';
+  $('#chat-input').value = '';
+});
+
+// --------------------------------------------------------------------------
+// Escape helpers
+// --------------------------------------------------------------------------
+
+function esc(str) {
+  return String(str)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+
+function enc(str) {
+  return encodeURIComponent(str);
+}
+
+// --------------------------------------------------------------------------
+// Boot
+// --------------------------------------------------------------------------
+
+loadProjects();
+</script>
+
+</body>
+</html>
