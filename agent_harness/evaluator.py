@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 
 from agent_harness.artifacts import (
     CheckResult,
@@ -15,6 +16,52 @@ from agent_harness.artifacts import (
     Verdict,
 )
 from agent_harness.planner import _compute_cost
+
+
+# ---------------------------------------------------------------------------
+# Structured output schema
+# ---------------------------------------------------------------------------
+
+EVALUATION_SCHEMA = {
+    "type": "json_schema",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "checks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "passed": {"type": "boolean"},
+                        "severity": {"type": "string"},
+                        "output": {"type": "string"},
+                    },
+                    "required": ["name", "passed", "severity", "output"],
+                    "additionalProperties": False,
+                },
+            },
+            "scores": {
+                "type": "object",
+            },
+            "verdict": {
+                "type": "string",
+                "enum": ["ADVANCE_TASK", "RETRY_TASK", "REQUEST_REPLAN", "HALT_RUN"],
+            },
+            "feedback": {"type": "string"},
+            "replan_reason": {"type": ["string", "null"]},
+        },
+        "required": ["checks", "scores", "verdict", "feedback"],
+        "additionalProperties": False,
+    },
+}
+
+_VERDICT_MAP = {
+    "ADVANCE_TASK": Verdict.ADVANCE_TASK,
+    "RETRY_TASK": Verdict.RETRY_TASK,
+    "REQUEST_REPLAN": Verdict.REQUEST_REPLAN,
+    "HALT_RUN": Verdict.HALT_RUN,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +86,13 @@ class DefaultEvaluator:
 
     The agent always gets a fresh session (no long-lived session state) so
     evaluations are independent and reproducible.
+
+    When ``structured_output=True`` (default), the evaluator uses
+    ``output_format=EVALUATION_SCHEMA`` so the agent SDK returns
+    schema-validated JSON, eliminating regex parsing ambiguity.
+
+    When ``structured_output=False``, the legacy ``_parse_evaluation()`` regex
+    approach is used (for backwards compatibility with older configs).
     """
 
     def __init__(
@@ -47,11 +101,13 @@ class DefaultEvaluator:
         tools: list[str],
         model: str,
         cwd: str,
+        structured_output: bool = True,
     ) -> None:
         self.system_prompt = system_prompt
         self.tools = tools
         self.model = model
         self.cwd = cwd
+        self.structured_output = structured_output
         self._eval_count = 0
 
     # ------------------------------------------------------------------
@@ -83,6 +139,12 @@ class DefaultEvaluator:
         result_text = ""
         session_id = ""
 
+        if not self.structured_output:
+            print(
+                "WARNING: Using legacy regex parser. Set structured_output=True for production.",
+                file=sys.stderr,
+            )
+
         try:
             from claude_agent_sdk import (  # type: ignore[import]
                 AssistantMessage,
@@ -91,15 +153,19 @@ class DefaultEvaluator:
                 query,
             )
 
+            options_kwargs: dict = dict(
+                system_prompt=self.system_prompt,
+                allowed_tools=self.tools,
+                model=self.model,
+                cwd=cwd,
+                permission_mode="bypassPermissions",
+            )
+            if self.structured_output:
+                options_kwargs["output_format"] = EVALUATION_SCHEMA
+
             async for message in query(
                 prompt=prompt,
-                options=ClaudeAgentOptions(
-                    system_prompt=self.system_prompt,
-                    allowed_tools=self.tools,
-                    model=self.model,
-                    cwd=cwd,
-                    permission_mode="bypassPermissions",
-                ),
+                options=ClaudeAgentOptions(**options_kwargs),
             ):
                 if isinstance(message, ResultMessage):
                     result_text = message.result or ""
@@ -121,7 +187,11 @@ class DefaultEvaluator:
         except ImportError:
             result_text = ""
 
-        eval_result = self._parse_evaluation(result_text, task.id)
+        if self.structured_output:
+            eval_result = self._parse_evaluation_structured(result_text, task.id)
+        else:
+            eval_result = self._parse_evaluation(result_text, task.id)
+
         total_usage.spend_usd = _compute_cost(self.model, total_usage)
 
         return StageExecution(
@@ -161,52 +231,141 @@ class DefaultEvaluator:
             for f in result.files_changed:
                 lines.append(f"- `{f}`")
 
-        lines += [
-            "",
-            "---",
-            "## Instructions",
-            "",
-            "1. **Run deterministic checks** using your Bash tool:",
-            "   - If tests exist: run `pytest` (or the project test command).",
-            "   - Run the linter if present (e.g. `ruff check .` or `flake8`).",
-            "   - Run the type checker if present (e.g. `mypy .` or `pyright`).",
-            "   For each check, note the exit code and relevant output.",
-            "",
-            "2. **Review the code** for quality, contract adherence, and security.",
-            "",
-            "3. **Output a structured EVALUATION RESULT block** in this exact format:",
-            "",
-            "```",
-            "## EVALUATION RESULT",
-            "",
-            "### Checks",
-            "CHECK: pytest | passed: true | severity: blocking | output: <summary>",
-            "CHECK: ruff | passed: false | severity: blocking | output: <errors>",
-            "",
-            "### Scores",
-            "SCORE: correctness | 0.85",
-            "SCORE: code_quality | 0.90",
-            "SCORE: security | 1.00",
-            "SCORE: spec_adherence | 0.75",
-            "",
-            "### Verdict",
-            "VERDICT: ADVANCE_TASK",
-            "",
-            "### Feedback",
-            "FEEDBACK: <actionable feedback>",
-            "",
-            "### Replan Reason",
-            "REPLAN_REASON: <only if verdict is REQUEST_REPLAN, else omit>",
-            "```",
-            "",
-            "Valid verdicts: ADVANCE_TASK, RETRY_TASK, REQUEST_REPLAN, HALT_RUN",
-            "",
-            "- Emit ADVANCE_TASK only when ALL blocking checks pass.",
-            "- Emit RETRY_TASK when checks fail but the task is fixable.",
-            "- Emit REQUEST_REPLAN when the contract itself is wrong or contradictory.",
-            "- Emit HALT_RUN when further iteration is futile.",
-        ]
+        if self.structured_output:
+            lines += [
+                "",
+                "---",
+                "## Instructions",
+                "",
+                "1. **Run deterministic checks** using your Bash tool:",
+                "   - If tests exist: run `pytest` (or the project test command).",
+                "   - Run the linter if present (e.g. `ruff check .` or `flake8`).",
+                "   - Run the type checker if present (e.g. `mypy .` or `pyright`).",
+                "   For each check, note the exit code and relevant output.",
+                "",
+                "2. **Review the code** for quality, contract adherence, and security.",
+                "",
+                "3. **Populate the structured output fields:**",
+                "",
+                "   - `checks`: array of check results, each with:",
+                "     - `name`: tool name (e.g. \"pytest\", \"ruff\")",
+                "     - `passed`: true if the check passed, false otherwise",
+                "     - `severity`: \"blocking\" or \"warning\"",
+                "     - `output`: brief summary of the check output",
+                "   - `scores`: object mapping dimension names to floats 0.0–1.0",
+                "     (e.g. {\"correctness\": 0.9, \"code_quality\": 0.8, \"spec_adherence\": 0.85})",
+                "   - `verdict`: one of ADVANCE_TASK, RETRY_TASK, REQUEST_REPLAN, HALT_RUN",
+                "   - `feedback`: actionable feedback for the Generator (required for RETRY_TASK)",
+                "   - `replan_reason`: reason the contract itself is flawed (required for REQUEST_REPLAN, null otherwise)",
+                "",
+                "**Verdict definitions:**",
+                "- ADVANCE_TASK — all blocking checks pass and all success criteria are met.",
+                "- RETRY_TASK — checks fail or criteria unmet, but the contract is valid.",
+                "- REQUEST_REPLAN — the contract itself is flawed or contradictory.",
+                "- HALT_RUN — quality is irrecoverable or further iteration is futile.",
+            ]
+        else:
+            lines += [
+                "",
+                "---",
+                "## Instructions",
+                "",
+                "1. **Run deterministic checks** using your Bash tool:",
+                "   - If tests exist: run `pytest` (or the project test command).",
+                "   - Run the linter if present (e.g. `ruff check .` or `flake8`).",
+                "   - Run the type checker if present (e.g. `mypy .` or `pyright`).",
+                "   For each check, note the exit code and relevant output.",
+                "",
+                "2. **Review the code** for quality, contract adherence, and security.",
+                "",
+                "3. **Output a structured EVALUATION RESULT block** in this exact format:",
+                "",
+                "```",
+                "## EVALUATION RESULT",
+                "",
+                "### Checks",
+                "CHECK: pytest | passed: true | severity: blocking | output: <summary>",
+                "CHECK: ruff | passed: false | severity: blocking | output: <errors>",
+                "",
+                "### Scores",
+                "SCORE: correctness | 0.85",
+                "SCORE: code_quality | 0.90",
+                "SCORE: security | 1.00",
+                "SCORE: spec_adherence | 0.75",
+                "",
+                "### Verdict",
+                "VERDICT: ADVANCE_TASK",
+                "",
+                "### Feedback",
+                "FEEDBACK: <actionable feedback>",
+                "",
+                "### Replan Reason",
+                "REPLAN_REASON: <only if verdict is REQUEST_REPLAN, else omit>",
+                "```",
+                "",
+                "Valid verdicts: ADVANCE_TASK, RETRY_TASK, REQUEST_REPLAN, HALT_RUN",
+                "",
+                "- Emit ADVANCE_TASK only when ALL blocking checks pass.",
+                "- Emit RETRY_TASK when checks fail but the task is fixable.",
+                "- Emit REQUEST_REPLAN when the contract itself is wrong or contradictory.",
+                "- Emit HALT_RUN when further iteration is futile.",
+            ]
         return "\n".join(lines)
+
+    def _parse_evaluation_structured(self, text: str, task_id: str) -> EvaluationResult:
+        """Parse an EvaluationResult from a schema-validated JSON string.
+
+        On JSON parse failure, returns a RETRY_TASK result with an explanatory
+        feedback message rather than silently defaulting.
+        """
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return EvaluationResult(
+                task_id=task_id,
+                verdict=Verdict.RETRY_TASK,
+                scores={},
+                check_results=[],
+                feedback=(
+                    f"Evaluator returned invalid JSON (structured_output=True). "
+                    f"Raw text: {text[:200]!r}"
+                ),
+                replan_reason=None,
+                raw_text=text,
+            )
+
+        check_results = [
+            CheckResult(
+                name=c.get("name", ""),
+                passed=bool(c.get("passed", False)),
+                severity=c.get("severity", "blocking"),
+                output=c.get("output", ""),
+            )
+            for c in data.get("checks", [])
+        ]
+
+        # scores values may be int or float in JSON; coerce to float
+        raw_scores = data.get("scores", {})
+        scores: dict[str, float] = {}
+        if isinstance(raw_scores, dict):
+            for k, v in raw_scores.items():
+                try:
+                    scores[k] = float(v)
+                except (TypeError, ValueError):
+                    pass
+
+        verdict_str = data.get("verdict", "RETRY_TASK").upper()
+        verdict = _VERDICT_MAP.get(verdict_str, Verdict.RETRY_TASK)
+
+        return EvaluationResult(
+            task_id=task_id,
+            verdict=verdict,
+            scores=scores,
+            check_results=check_results,
+            feedback=data.get("feedback", ""),
+            replan_reason=data.get("replan_reason"),
+            raw_text=text,
+        )
 
     def _parse_evaluation(self, text: str, task_id: str) -> EvaluationResult:
         """Extract an EvaluationResult from the agent's response text."""
@@ -216,9 +375,9 @@ class DefaultEvaluator:
         feedback = ""
         replan_reason: str | None = None
 
-        # Locate the EVALUATION RESULT block
+        # Locate the EVALUATION RESULT block — tolerant of formatting variation
         block_match = re.search(
-            r"##\s+EVALUATION RESULT\s*\n([\s\S]*?)(?:^```|$)",
+            r"##\s+EVALUATION\s+RESULT\s*\n([\s\S]*?)(?:^```|\Z)",
             text,
             re.IGNORECASE | re.MULTILINE,
         )
@@ -250,17 +409,18 @@ class DefaultEvaluator:
             except ValueError:
                 pass
 
-        # Parse VERDICT
+        # Parse VERDICT — handle both "VERDICT: X" and "## Verdict\nX" formats
         verdict_match = re.search(r"VERDICT:\s*(\S+)", block, re.IGNORECASE)
+        if not verdict_match:
+            # Fallback: look for verdict keyword on its own line (agent may use markdown headings)
+            verdict_match = re.search(
+                r"(?:^|\n)\s*(ADVANCE_TASK|RETRY_TASK|REQUEST_REPLAN|HALT_RUN)\s*(?:\n|$)",
+                block,
+                re.IGNORECASE,
+            )
         if verdict_match:
             raw_verdict = verdict_match.group(1).strip().upper()
-            verdict_map = {
-                "ADVANCE_TASK": Verdict.ADVANCE_TASK,
-                "RETRY_TASK": Verdict.RETRY_TASK,
-                "REQUEST_REPLAN": Verdict.REQUEST_REPLAN,
-                "HALT_RUN": Verdict.HALT_RUN,
-            }
-            verdict = verdict_map.get(raw_verdict, Verdict.RETRY_TASK)
+            verdict = _VERDICT_MAP.get(raw_verdict, Verdict.RETRY_TASK)
 
         # Parse FEEDBACK
         feedback_match = re.search(r"FEEDBACK:\s*(.+)", block, re.IGNORECASE)

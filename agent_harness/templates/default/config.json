@@ -6,5 +6,6 @@
   "evaluator_tools": ["Read", "Bash", "Glob", "Grep"],
   "planner_tools": ["Read", "Glob", "Grep"],
   "target_repo": null,
-  "session_mode": "long_lived"
+  "session_mode": "long_lived",
+  "structured_output": true
 }

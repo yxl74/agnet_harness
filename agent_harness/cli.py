@@ -54,11 +54,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         from agent_harness.core import Orchestrator
 
         try:
-            from agent_harness.agents import DefaultPlanner, DefaultGenerator, DefaultEvaluator
+            from agent_harness.planner import DefaultPlanner
+            from agent_harness.generator import DefaultGenerator
+            from agent_harness.evaluator import DefaultEvaluator
+            _has_agents = True
         except ImportError:
-            DefaultPlanner = None  # type: ignore[assignment,misc]
-            DefaultGenerator = None  # type: ignore[assignment,misc]
-            DefaultEvaluator = None  # type: ignore[assignment,misc]
+            _has_agents = False
 
         print(f"Loading project '{project_name}' from {project_dir} ...")
 
@@ -70,10 +71,33 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         print(f"Planning task: {task_description!r}")
 
-        # Build agent instances if we have default implementations
-        planner = DefaultPlanner(config) if DefaultPlanner is not None else None
-        generator = DefaultGenerator(config) if DefaultGenerator is not None else None
-        evaluator = DefaultEvaluator(config) if DefaultEvaluator is not None else None
+        # Build agent instances from config
+        if _has_agents:
+            cwd = str(Path(config.target_repo).resolve()) if config.target_repo else str(project_dir)
+            planner = DefaultPlanner(
+                system_prompt=config.planner_prompt,
+                tools=config.planner_tools,
+                model=config.model,
+                cwd=cwd,
+                structured_output=config.structured_output,
+            )
+            generator = DefaultGenerator(
+                system_prompt=config.generator_prompt,
+                tools=config.generator_tools,
+                model=config.model,
+                cwd=cwd,
+            )
+            evaluator = DefaultEvaluator(
+                system_prompt=config.evaluator_prompt,
+                tools=config.evaluator_tools,
+                model=config.model,
+                cwd=cwd,
+                structured_output=config.structured_output,
+            )
+        else:
+            planner = None  # type: ignore[assignment]
+            generator = None  # type: ignore[assignment]
+            evaluator = None  # type: ignore[assignment]
 
         if planner is None or generator is None or evaluator is None:
             print(
@@ -128,12 +152,32 @@ def cmd_resume(args: argparse.Namespace) -> int:
         from agent_harness.core import Orchestrator
 
         try:
-            from agent_harness.agents import DefaultPlanner, DefaultGenerator, DefaultEvaluator
+            from agent_harness.planner import DefaultPlanner
+            from agent_harness.generator import DefaultGenerator
+            from agent_harness.evaluator import DefaultEvaluator
             from agent_harness.config import HarnessConfig
             config = HarnessConfig.from_project(project_dir)
-            planner = DefaultPlanner(config)
-            generator = DefaultGenerator(config)
-            evaluator = DefaultEvaluator(config)
+            cwd = str(Path(config.target_repo).resolve()) if config.target_repo else str(project_dir)
+            planner = DefaultPlanner(
+                system_prompt=config.planner_prompt,
+                tools=config.planner_tools,
+                model=config.model,
+                cwd=cwd,
+                structured_output=config.structured_output,
+            )
+            generator = DefaultGenerator(
+                system_prompt=config.generator_prompt,
+                tools=config.generator_tools,
+                model=config.model,
+                cwd=cwd,
+            )
+            evaluator = DefaultEvaluator(
+                system_prompt=config.evaluator_prompt,
+                tools=config.evaluator_tools,
+                model=config.model,
+                cwd=cwd,
+                structured_output=config.structured_output,
+            )
         except ImportError:
             planner = None  # type: ignore[assignment]
             generator = None  # type: ignore[assignment]
@@ -166,7 +210,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
             else:
                 task_description = ""
 
-            state = await orchestrator.run(task_description)
+            state = await orchestrator.resume_run(task_description)
         except KeyboardInterrupt:
             print("\nInterrupted. Saving state ...", file=sys.stderr)
             orchestrator._save_state()

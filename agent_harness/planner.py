@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 
 from agent_harness.artifacts import (
     Contract,
@@ -39,6 +40,48 @@ def _compute_cost(model: str, usage: UsageInfo) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Structured output schema
+# ---------------------------------------------------------------------------
+
+PLAN_SCHEMA = {
+    "type": "json_schema",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "spec": {"type": "string"},
+            "tasks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "title": {"type": "string"},
+                        "description": {"type": "string"},
+                        "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
+                        "dependencies": {"type": "array", "items": {"type": "string"}},
+                        "contract": {
+                            "type": "object",
+                            "properties": {
+                                "success_criteria": {"type": "array", "items": {"type": "string"}},
+                                "scope_boundaries": {"type": "string"},
+                            },
+                            "required": ["success_criteria", "scope_boundaries"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "required": ["id", "title", "description", "acceptance_criteria", "dependencies", "contract"],
+                    "additionalProperties": False,
+                },
+            },
+            "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["spec", "tasks", "acceptance_criteria"],
+        "additionalProperties": False,
+    },
+}
+
+
+# ---------------------------------------------------------------------------
 # DefaultPlanner
 # ---------------------------------------------------------------------------
 
@@ -49,9 +92,12 @@ class DefaultPlanner:
     Wraps ``claude_agent_sdk.query()`` to satisfy the ``Planner`` protocol
     defined in ``agent_harness.core``.
 
-    The planner is instructed via its system prompt to produce a structured
-    JSON block inside its response.  The ``_parse_plan`` method extracts that
-    JSON block and falls back to a minimal single-task plan if parsing fails.
+    When ``structured_output=True`` (default), the planner uses
+    ``output_format=PLAN_SCHEMA`` so the agent SDK returns schema-validated
+    JSON directly, eliminating regex-based parsing failures.
+
+    When ``structured_output=False``, the legacy ``_parse_plan()`` regex
+    approach is used (for backwards compatibility with older configs).
     """
 
     def __init__(
@@ -60,11 +106,13 @@ class DefaultPlanner:
         tools: list[str],
         model: str,
         cwd: str,
+        structured_output: bool = True,
     ) -> None:
         self.system_prompt = system_prompt
         self.tools = tools
         self.model = model
         self.cwd = cwd
+        self.structured_output = structured_output
         self._session_id: str | None = None
         self._plan_version = 0
 
@@ -99,6 +147,12 @@ class DefaultPlanner:
         result_text = ""
         session_id = ""
 
+        if not self.structured_output:
+            print(
+                "WARNING: Using legacy regex parser. Set structured_output=True for production.",
+                file=sys.stderr,
+            )
+
         try:
             from claude_agent_sdk import (  # type: ignore[import]
                 AssistantMessage,
@@ -107,15 +161,19 @@ class DefaultPlanner:
                 query,
             )
 
+            options_kwargs: dict = dict(
+                system_prompt=self.system_prompt,
+                allowed_tools=self.tools,
+                model=self.model,
+                cwd=cwd,
+                permission_mode="bypassPermissions",
+            )
+            if self.structured_output:
+                options_kwargs["output_format"] = PLAN_SCHEMA
+
             async for message in query(
                 prompt=prompt,
-                options=ClaudeAgentOptions(
-                    system_prompt=self.system_prompt,
-                    allowed_tools=self.tools,
-                    model=self.model,
-                    cwd=cwd,
-                    permission_mode="bypassPermissions",
-                ),
+                options=ClaudeAgentOptions(**options_kwargs),
             ):
                 if isinstance(message, ResultMessage):
                     result_text = message.result or ""
@@ -139,7 +197,11 @@ class DefaultPlanner:
             # SDK not installed — callers using mocks should patch query directly
             result_text = ""
 
-        plan = self._parse_plan(result_text, task)
+        if self.structured_output:
+            plan = self._parse_plan_structured(result_text, task)
+        else:
+            plan = self._parse_plan(result_text, task)
+
         total_usage.spend_usd = _compute_cost(self.model, total_usage)
 
         return StageExecution(
@@ -159,28 +221,46 @@ class DefaultPlanner:
         replan_context: str | None,
         completed_task_ids: list[str] | None,
     ) -> str:
-        lines = [
-            f"Create a detailed plan for: {task}",
-            "",
-            "Output your plan as a JSON block fenced with ```json ... ``` containing:",
-            "{",
-            '  "spec": "brief product/spec context",',
-            '  "acceptance_criteria": ["overall criterion 1", "..."],',
-            '  "tasks": [',
-            "    {",
-            '      "id": "task-01",',
-            '      "title": "Short title",',
-            '      "description": "What to build",',
-            '      "acceptance_criteria": ["..."],',
-            '      "dependencies": [],',
-            '      "contract": {',
-            '        "success_criteria": ["..."],',
-            '        "scope_boundaries": "..."',
-            "      }",
-            "    }",
-            "  ]",
-            "}",
-        ]
+        if self.structured_output:
+            lines = [
+                f"Create a detailed plan for: {task}",
+                "",
+                "Your response will be structured JSON. Populate these fields:",
+                '  "spec": brief product/spec context',
+                '  "acceptance_criteria": list of overall acceptance criteria for the run',
+                '  "tasks": array of task objects, each with:',
+                '    "id": sequential identifier like "task-01"',
+                '    "title": short imperative title',
+                '    "description": what to build (specific enough for the Generator)',
+                '    "acceptance_criteria": per-task verifiable criteria',
+                '    "dependencies": list of task IDs this task depends on (or empty)',
+                '    "contract":',
+                '      "success_criteria": list of verifiable pass/fail criteria',
+                '      "scope_boundaries": what is in and out of scope',
+            ]
+        else:
+            lines = [
+                f"Create a detailed plan for: {task}",
+                "",
+                "Output your plan as a JSON block fenced with ```json ... ``` containing:",
+                "{",
+                '  "spec": "brief product/spec context",',
+                '  "acceptance_criteria": ["overall criterion 1", "..."],',
+                '  "tasks": [',
+                "    {",
+                '      "id": "task-01",',
+                '      "title": "Short title",',
+                '      "description": "What to build",',
+                '      "acceptance_criteria": ["..."],',
+                '      "dependencies": [],',
+                '      "contract": {',
+                '        "success_criteria": ["..."],',
+                '        "scope_boundaries": "..."',
+                "      }",
+                "    }",
+                "  ]",
+                "}",
+            ]
 
         if replan_context:
             lines += [
@@ -195,6 +275,43 @@ class DefaultPlanner:
             ]
 
         return "\n".join(lines)
+
+    def _parse_plan_structured(self, text: str, task_description: str) -> Plan:
+        """Parse a Plan from a schema-validated JSON string returned by the SDK.
+
+        Raises:
+            ValueError: if ``text`` is not valid JSON — callers should treat
+                this as a hard error, not fall back silently.
+        """
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Planner returned invalid JSON (structured_output=True). "
+                f"Raw text: {text[:200]!r}"
+            ) from exc
+
+        tasks = [
+            Task(
+                id=t.get("id", f"task-{i+1:02d}"),
+                title=t.get("title", f"Task {i+1}"),
+                description=t.get("description", ""),
+                acceptance_criteria=t.get("acceptance_criteria", []),
+                dependencies=t.get("dependencies", []),
+                contract=Contract(
+                    success_criteria=t.get("contract", {}).get("success_criteria", []),
+                    scope_boundaries=t.get("contract", {}).get("scope_boundaries", ""),
+                ),
+            )
+            for i, t in enumerate(data.get("tasks", []))
+        ]
+        return Plan(
+            task_description=task_description,
+            spec=data.get("spec", ""),
+            tasks=tasks,
+            acceptance_criteria=data.get("acceptance_criteria", []),
+            raw_text=text,
+        )
 
     def _parse_plan(self, text: str, task_description: str) -> Plan:
         """Extract a Plan from the agent's response.

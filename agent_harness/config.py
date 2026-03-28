@@ -52,6 +52,7 @@ class HarnessConfig:
     planner_prompt: str              # System prompt content (loaded from .md file)
     generator_prompt: str
     evaluator_prompt: str
+    structured_output: bool = True   # Use schema-validated structured output (recommended)
 
     # ------------------------------------------------------------------
     # Loading
@@ -100,6 +101,7 @@ class HarnessConfig:
             planner_prompt=_load_prompt("planner.md"),
             generator_prompt=_load_prompt("generator.md"),
             evaluator_prompt=_load_prompt("evaluator.md"),
+            structured_output=bool(raw.get("structured_output", True)),
         )
 
     # ------------------------------------------------------------------

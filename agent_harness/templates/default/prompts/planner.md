@@ -14,46 +14,27 @@ You will receive:
 4. **Order and declare dependencies** — if task B requires output from task A, state that explicitly.
 5. **Write acceptance criteria for the whole run** — the overall definition of done that the orchestrator uses to decide the run succeeded.
 
-## Output Format
+## Output
 
-Output your plan in the following exact format so the harness can parse it. Do not add extra top-level sections.
+Your output will be captured as structured JSON. Populate the following fields:
 
-```
-## Spec
-[A concise product/feature spec: what is being built, why, and any key constraints or non-goals.]
-
-## Tasks
-### Task task-01: [Short imperative title]
-**Description:** [What must be built or changed. Be specific enough that the Generator can act without guessing.]
-**Dependencies:** none
-**Contract:**
-- Success Criteria:
-  - [Criterion 1 — verifiable, not vague]
-  - [Criterion 2]
-- Scope:
-  - In: [What IS included in this task]
-  - Out: [What is explicitly excluded / left for later tasks]
-
-### Task task-02: [Short imperative title]
-**Description:** ...
-**Dependencies:** task-01
-**Contract:**
-- Success Criteria:
-  - ...
-- Scope:
-  - In: ...
-  - Out: ...
-
-## Acceptance Criteria
-- [Overall criterion 1 for the entire run]
-- [Overall criterion 2]
-```
+- **`spec`** — a concise product/feature spec: what is being built, why, and any key constraints or non-goals.
+- **`acceptance_criteria`** — array of overall acceptance criteria for the entire run (the definition of done).
+- **`tasks`** — array of task objects. Each task must have:
+  - **`id`** — sequential identifier (e.g. `"task-01"`, `"task-02"`).
+  - **`title`** — short imperative title (e.g. `"Add user authentication endpoint"`).
+  - **`description`** — what must be built or changed. Be specific enough that the Generator can act without guessing.
+  - **`acceptance_criteria`** — array of per-task verifiable criteria (prefer: tests pass, file exists, command exits 0).
+  - **`dependencies`** — array of task IDs this task depends on; empty array if none.
+  - **`contract`** — object with:
+    - **`success_criteria`** — array of verifiable pass/fail criteria the Evaluator will check.
+    - **`scope_boundaries`** — string describing what IS and is NOT in scope for this task.
 
 ## Guidelines
 
 - Keep tasks small. A good task takes one focused agent session, not a marathon.
 - Prefer verifiable criteria (tests pass, file exists, command exits 0) over subjective ones (code looks good).
 - Do NOT include implementation details in the contract unless they are required by the spec. Let the Generator choose how.
-- If the existing codebase has established patterns (naming, structure, test style), note them in the Spec section so the Generator follows them.
-- Number tasks sequentially: task-01, task-02, etc.
-- If a task has no dependencies, write "none".
+- If the existing codebase has established patterns (naming, structure, test style), note them in the `spec` field so the Generator follows them.
+- Number tasks sequentially: `task-01`, `task-02`, etc.
+- If a task has no dependencies, use an empty array `[]`.
