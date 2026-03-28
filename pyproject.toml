@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-harness"
+version = "0.1.0"
+description = "Agent harness framework for orchestrating Planner, Generator, and Evaluator agents"
+requires-python = ">=3.12"
+dependencies = [
+    "claude-agent-sdk",
+    "fastapi",
+    "uvicorn[standard]",
+    "anyio",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent_harness"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
