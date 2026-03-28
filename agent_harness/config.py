@@ -53,6 +53,8 @@ class HarnessConfig:
     generator_prompt: str
     evaluator_prompt: str
     structured_output: bool = True   # Use schema-validated structured output (recommended)
+    max_retries_per_task: int = 5         # Hard ceiling on attempts per task
+    no_progress_threshold: int = 3        # Pause if same failure repeats this many times
 
     # ------------------------------------------------------------------
     # Loading
@@ -102,6 +104,8 @@ class HarnessConfig:
             generator_prompt=_load_prompt("generator.md"),
             evaluator_prompt=_load_prompt("evaluator.md"),
             structured_output=bool(raw.get("structured_output", True)),
+            max_retries_per_task=int(raw.get("max_retries_per_task", 5)),
+            no_progress_threshold=int(raw.get("no_progress_threshold", 3)),
         )
 
     # ------------------------------------------------------------------

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from agent_harness.core import Orchestrator
 from agent_harness.artifacts import (
+    CheckResult,
     Contract,
     EvaluationResult,
     GenerationResult,
@@ -756,3 +757,313 @@ async def test_run_state_persisted_at_completion(tmp_path, mock_config, simple_p
     assert state_path.exists()
     data = json_module.loads(state_path.read_text())
     assert data["status"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# Resume tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resume_paused_run_does_not_replan(tmp_path, mock_config, simple_plan):
+    """Resume a paused run: planner should NOT be called again."""
+    mock_planner = AsyncMock()
+    mock_planner.plan.return_value = _planner_exec(simple_plan)
+
+    mock_generator = AsyncMock()
+    mock_generator.generate.return_value = _generator_exec()
+
+    # First call: budget_exhausted (pause). Second call: ADVANCE_TASK
+    mock_evaluator = AsyncMock()
+    mock_evaluator.evaluate.return_value = _evaluator_exec()
+
+    # --- First run: exhaust budget to trigger pause ---
+    # Plan costs 0.01, gen costs 0.02, eval costs 0.015 → total 0.045
+    # Budget check happens before generate; after plan (0.01) it passes,
+    # after plan+gen+eval (0.045) the next budget check triggers pause.
+    # So we need the task to retry once (two gen/eval cycles):
+    # first eval returns RETRY, second budget check catches it.
+    retry_eval = _evaluator_exec(verdict=Verdict.RETRY_TASK)
+    mock_evaluator.evaluate.side_effect = [retry_eval, _evaluator_exec()]
+
+    low_budget_config = HarnessConfig(
+        name="test", model="claude-opus-4-6", max_budget_usd=0.045,
+        generator_tools=[], evaluator_tools=[], planner_tools=[],
+        target_repo=None, session_mode="fresh",
+        planner_prompt="", generator_prompt="", evaluator_prompt="",
+    )
+    run_dir = tmp_path / "runs" / "resume-test"
+    run_dir.mkdir(parents=True)
+    orch = Orchestrator(
+        planner=mock_planner, generator=mock_generator, evaluator=mock_evaluator,
+        config=low_budget_config, run_dir=run_dir,
+    )
+    state = await orch.run("test task")
+    assert state.status == RunStatus.PAUSED
+    planner_calls_before = mock_planner.plan.call_count
+
+    # --- Resume: increase budget, planner should NOT be called again ---
+    resumed_config = HarnessConfig(
+        name="test", model="claude-opus-4-6", max_budget_usd=100.0,
+        generator_tools=[], evaluator_tools=[], planner_tools=[],
+        target_repo=None, session_mode="fresh",
+        planner_prompt="", generator_prompt="", evaluator_prompt="",
+    )
+    orch2 = Orchestrator(
+        planner=mock_planner, generator=mock_generator, evaluator=mock_evaluator,
+        config=resumed_config, run_dir=run_dir,
+    )
+    orch2.state = RunState.load(run_dir / "run_state.json")
+    state2 = await orch2.resume_run("test task")
+
+    assert state2.status == RunStatus.COMPLETED
+    assert mock_planner.plan.call_count == planner_calls_before  # No new planner calls
+
+
+@pytest.mark.asyncio
+async def test_resume_failed_run_without_plan_replans(tmp_path, mock_config, simple_plan):
+    """Resume a FAILED run that never completed planning: should re-plan."""
+    mock_planner = AsyncMock()
+    mock_planner.plan.return_value = _planner_exec(simple_plan)
+
+    mock_generator = AsyncMock()
+    mock_generator.generate.return_value = _generator_exec()
+
+    mock_evaluator = AsyncMock()
+    mock_evaluator.evaluate.return_value = _evaluator_exec()
+
+    run_dir = tmp_path / "runs" / "failed-early"
+    run_dir.mkdir(parents=True)
+
+    # Simulate a run that failed before plan.json was written
+    state = RunState.new("failed-early")
+    state.transition(RunStatus.FAILED, reason="agent crash during planning")
+    state.save(run_dir / "run_state.json")
+
+    orch = Orchestrator(
+        planner=mock_planner, generator=mock_generator, evaluator=mock_evaluator,
+        config=mock_config, run_dir=run_dir,
+    )
+    orch.state = state
+    result = await orch.resume_run("test task")
+
+    assert result.status == RunStatus.COMPLETED
+    assert mock_planner.plan.call_count == 1  # Had to re-plan
+
+
+@pytest.mark.asyncio
+async def test_resume_after_retry_restores_evaluation_context(tmp_path, mock_config, simple_plan):
+    """Resume after RETRY_TASK: generator should receive the persisted evaluation."""
+    mock_planner = AsyncMock()
+    mock_planner.plan.return_value = _planner_exec(simple_plan)
+
+    mock_generator = AsyncMock()
+    mock_generator.generate.return_value = _generator_exec()
+
+    # First call: RETRY, then budget pause. After resume: ADVANCE.
+    retry_eval = _evaluator_exec(verdict=Verdict.RETRY_TASK, session_key="evaluator:t1:iter-0")
+    advance_eval = _evaluator_exec(verdict=Verdict.ADVANCE_TASK, session_key="evaluator:t1:iter-1")
+
+    mock_evaluator = AsyncMock()
+    mock_evaluator.evaluate.side_effect = [retry_eval, advance_eval]
+
+    # Budget just enough for plan + one generate/evaluate cycle, then pause
+    tight_config = HarnessConfig(
+        name="test", model="claude-opus-4-6", max_budget_usd=0.045,
+        generator_tools=[], evaluator_tools=[], planner_tools=[],
+        target_repo=None, session_mode="fresh",
+        planner_prompt="", generator_prompt="", evaluator_prompt="",
+    )
+    run_dir = tmp_path / "runs" / "retry-resume"
+    run_dir.mkdir(parents=True)
+    orch = Orchestrator(
+        planner=mock_planner, generator=mock_generator, evaluator=mock_evaluator,
+        config=tight_config, run_dir=run_dir,
+    )
+    state = await orch.run("test task")
+    assert state.status == RunStatus.PAUSED
+    assert state.iterations_on_current_task >= 1
+
+    # Resume with higher budget
+    high_budget_config = HarnessConfig(
+        name="test", model="claude-opus-4-6", max_budget_usd=100.0,
+        generator_tools=[], evaluator_tools=[], planner_tools=[],
+        target_repo=None, session_mode="fresh",
+        planner_prompt="", generator_prompt="", evaluator_prompt="",
+    )
+    orch2 = Orchestrator(
+        planner=mock_planner, generator=mock_generator, evaluator=mock_evaluator,
+        config=high_budget_config, run_dir=run_dir,
+    )
+    orch2.state = RunState.load(run_dir / "run_state.json")
+    state2 = await orch2.resume_run("test task")
+
+    assert state2.status == RunStatus.COMPLETED
+
+    # The generator's second call (after resume) should have received
+    # the persisted evaluation, not None
+    resumed_gen_call = mock_generator.generate.call_args_list[-1]
+    prior_eval_arg = resumed_gen_call[0][1]  # second positional arg
+    assert prior_eval_arg is not None
+    assert prior_eval_arg.verdict == Verdict.RETRY_TASK
+
+
+# ---------------------------------------------------------------------------
+# No-progress and retry-budget guardrails (P0.3)
+# ---------------------------------------------------------------------------
+
+
+def _retry_eval_exec(
+    task_id: str = "t1",
+    feedback: str = "needs work",
+    check_results: list | None = None,
+    session_key: str = "evaluator:t1:iter-0",
+) -> StageExecution:
+    """Build a RETRY_TASK StageExecution with custom feedback and check_results."""
+    return StageExecution(
+        result=EvaluationResult(
+            task_id=task_id,
+            verdict=Verdict.RETRY_TASK,
+            scores={},
+            check_results=check_results or [],
+            feedback=feedback,
+            replan_reason=None,
+            raw_text="retry eval",
+        ),
+        usage=UsageInfo(100, 50, 0.01),
+        session_key=session_key,
+        session_id="sess-retry",
+    )
+
+
+def _make_retries_config(
+    max_retries_per_task: int = 5,
+    no_progress_threshold: int = 3,
+) -> HarnessConfig:
+    return HarnessConfig(
+        name="test-retries",
+        model="claude-opus-4-6",
+        max_budget_usd=100.0,
+        generator_tools=[],
+        evaluator_tools=[],
+        planner_tools=[],
+        target_repo=None,
+        session_mode="fresh",
+        planner_prompt="",
+        generator_prompt="",
+        evaluator_prompt="",
+        max_retries_per_task=max_retries_per_task,
+        no_progress_threshold=no_progress_threshold,
+    )
+
+
+@pytest.mark.asyncio
+async def test_max_retries_pauses_run(tmp_path, simple_plan):
+    """Evaluator always returns RETRY_TASK: run pauses after max_retries_per_task iterations."""
+    config = _make_retries_config(max_retries_per_task=3, no_progress_threshold=99)
+
+    mock_planner = AsyncMock()
+    mock_planner.plan.return_value = _planner_exec(simple_plan)
+
+    mock_generator = AsyncMock()
+    mock_generator.generate.return_value = _generator_exec()
+
+    mock_evaluator = AsyncMock()
+    # Always returns RETRY with different feedback so no-progress won't trigger first
+    mock_evaluator.evaluate.side_effect = [
+        _retry_eval_exec(feedback=f"attempt {i}") for i in range(10)
+    ]
+
+    orchestrator = _make_orchestrator(tmp_path, config, mock_planner, mock_generator, mock_evaluator)
+    state = await orchestrator.run("test task")
+
+    assert state.status == RunStatus.PAUSED
+    assert state.status_reason == "max_retries_exceeded"
+    # Should have retried exactly max_retries_per_task times (3 evaluate calls)
+    assert mock_evaluator.evaluate.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_no_progress_detection(tmp_path, simple_plan):
+    """Repeated identical failures pause the run after no_progress_threshold repetitions."""
+    config = _make_retries_config(max_retries_per_task=99, no_progress_threshold=2)
+
+    mock_planner = AsyncMock()
+    mock_planner.plan.return_value = _planner_exec(simple_plan)
+
+    mock_generator = AsyncMock()
+    mock_generator.generate.return_value = _generator_exec()
+
+    identical_feedback = "test always fails the same way"
+    mock_evaluator = AsyncMock()
+    mock_evaluator.evaluate.side_effect = [
+        _retry_eval_exec(feedback=identical_feedback) for _ in range(10)
+    ]
+
+    orchestrator = _make_orchestrator(tmp_path, config, mock_planner, mock_generator, mock_evaluator)
+    state = await orchestrator.run("test task")
+
+    assert state.status == RunStatus.PAUSED
+    assert "no_progress_detected" in state.status_reason
+    # Should pause after 2 identical fingerprints
+    assert mock_evaluator.evaluate.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_different_feedback_does_not_trigger_no_progress(tmp_path, simple_plan):
+    """Varying feedback avoids no-progress detection; run hits max_retries instead."""
+    config = _make_retries_config(max_retries_per_task=4, no_progress_threshold=3)
+
+    mock_planner = AsyncMock()
+    mock_planner.plan.return_value = _planner_exec(simple_plan)
+
+    mock_generator = AsyncMock()
+    mock_generator.generate.return_value = _generator_exec()
+
+    # Each retry has unique feedback -> different fingerprints
+    mock_evaluator = AsyncMock()
+    mock_evaluator.evaluate.side_effect = [
+        _retry_eval_exec(feedback=f"unique error #{i}") for i in range(10)
+    ]
+
+    orchestrator = _make_orchestrator(tmp_path, config, mock_planner, mock_generator, mock_evaluator)
+    state = await orchestrator.run("test task")
+
+    assert state.status == RunStatus.PAUSED
+    assert state.status_reason == "max_retries_exceeded"
+    assert mock_evaluator.evaluate.call_count == 4
+
+
+@pytest.mark.asyncio
+async def test_fingerprint_resets_on_new_task(tmp_path, two_task_plan):
+    """Fingerprint history from task 1 does not bleed into task 2."""
+    config = _make_retries_config(max_retries_per_task=99, no_progress_threshold=2)
+
+    mock_planner = AsyncMock()
+    mock_planner.plan.return_value = _planner_exec(two_task_plan)
+
+    mock_generator = AsyncMock()
+    mock_generator.generate.return_value = _generator_exec()
+
+    # Task 1: one retry with the same feedback, then advance
+    # Task 2: one retry with that same feedback, then advance
+    # If fingerprints weren't reset, task 2's first retry would already be a repeat of
+    # task 1's retry and could trigger no_progress_threshold=2 on the second retry.
+    # With proper reset, task 2 should need 2 retries before pausing.
+    same_feedback = "persistent error"
+    mock_evaluator = AsyncMock()
+    mock_evaluator.evaluate.side_effect = [
+        _retry_eval_exec(task_id="t1", feedback=same_feedback),   # t1: retry 1
+        _evaluator_exec("t1", Verdict.ADVANCE_TASK),               # t1: advance
+        _retry_eval_exec(task_id="t2", feedback=same_feedback),   # t2: retry 1
+        _evaluator_exec("t2", Verdict.ADVANCE_TASK),               # t2: advance
+    ]
+
+    orchestrator = _make_orchestrator(tmp_path, config, mock_planner, mock_generator, mock_evaluator)
+    state = await orchestrator.run("two task test")
+
+    # Both tasks should complete — fingerprint reset on task advance means
+    # task 2's single retry doesn't combine with task 1's retry to hit threshold=2
+    assert state.status == RunStatus.COMPLETED
+    assert "t1" in state.completed_task_ids
+    assert "t2" in state.completed_task_ids

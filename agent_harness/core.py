@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from datetime import datetime, timezone
@@ -85,29 +86,81 @@ class Orchestrator:
         self.config = config
         self.run_dir = Path(run_dir)
         self.state = RunState.new(run_id=self.run_dir.name)
-        self.project_cwd = (
-            str(Path(config.target_repo).resolve())
-            if config.target_repo
-            else str(self.run_dir / "project")
-        )
+        self._failure_fingerprints: list[str] = []  # Tracks fingerprints for current task
+        if config.target_repo:
+            self.project_cwd = str(Path(config.target_repo).resolve())
+        else:
+            project_path = self.run_dir / "project"
+            project_path.mkdir(parents=True, exist_ok=True)
+            self.project_cwd = str(project_path)
 
     # ------------------------------------------------------------------
     # Main entry point
     # ------------------------------------------------------------------
 
     async def run(self, task_description: str) -> RunState:
-        """Execute the full harness loop and return the final RunState."""
+        """Start a new harness run: plan from scratch, then execute tasks."""
 
         # ---- Phase 1: Plan ----
-        plan_exec = await self.planner.plan(task_description, cwd=self.project_cwd)
+        plan = await self._do_plan(task_description)
+
+        # ---- Phase 2: Execute tasks ----
+        return await self._execute_tasks(task_description, plan)
+
+    async def resume_run(self, task_description: str) -> RunState:
+        """Resume an existing run from persisted state.
+
+        If planning completed (plan.json exists), loads the plan and
+        continues from the current task index without re-invoking the
+        planner. If planning never completed (e.g., FAILED during
+        planning), restarts from the planning phase.
+        """
+        plan_path = self.run_dir / "plan.json"
+
+        if not plan_path.exists():
+            # Planning never completed — restart from plan phase
+            plan = await self._do_plan(task_description)
+        else:
+            plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
+            plan = Plan.from_json(plan_data)
+            self.state.transition(RunStatus.EXECUTING)
+            self._save_state()
+
+        # Restore prior evaluation context if resuming a retried task
+        prior_evaluation = self._load_prior_evaluation()
+
+        return await self._execute_tasks(task_description, plan, prior_evaluation)
+
+    async def _do_plan(
+        self,
+        task_description: str,
+        replan_context: str | None = None,
+    ) -> Plan:
+        """Invoke the planner and adopt the resulting plan."""
+        plan_exec = await self.planner.plan(
+            task_description,
+            cwd=self.project_cwd,
+            replan_context=replan_context,
+            completed_task_ids=self.state.completed_task_ids if replan_context else None,
+        )
         plan = plan_exec.result
         self._track(plan_exec)
+        if replan_context:
+            self.state.plan_version += 1
         self._adopt_plan(plan)
         self._write_artifacts(plan)
         self.state.transition(RunStatus.EXECUTING)
         self._save_state()
+        return plan
 
-        # ---- Phase 2: Per-task loop ----
+    async def _execute_tasks(
+        self,
+        task_description: str,
+        plan: Plan,
+        initial_prior_evaluation: EvaluationResult | None = None,
+    ) -> RunState:
+        """Execute the per-task generate/evaluate loop."""
+        first_task = True
         while self.state.current_task_index < len(plan.tasks):
             task = plan.tasks[self.state.current_task_index]
 
@@ -117,7 +170,15 @@ class Orchestrator:
                 self._save_state()
                 continue
 
-            prior_evaluation: EvaluationResult | None = None
+            # On resume, seed the first task with persisted evaluation context
+            if first_task and initial_prior_evaluation is not None:
+                prior_evaluation: EvaluationResult | None = initial_prior_evaluation
+            else:
+                prior_evaluation = None
+            first_task = False
+
+            # Reset failure fingerprint history for this task
+            self._failure_fingerprints = []
 
             while True:
                 # Budget check
@@ -143,7 +204,7 @@ class Orchestrator:
                 self._track(eval_exec)
                 evaluation = eval_exec.result
                 self._write_task_artifacts("evaluation", task, evaluation)
-                self.state.iterations_on_current_task += 1
+                self.state.record_attempt()
                 self._save_state()
 
                 match evaluation.verdict:
@@ -151,27 +212,38 @@ class Orchestrator:
                         self._commit_checkpoint(task)
                         self.state.completed_task_ids.append(task.id)
                         self.state.advance_task()
+                        self._failure_fingerprints = []
                         self._save_state()
                         break
 
                     case Verdict.RETRY_TASK:
                         prior_evaluation = evaluation
-                        # No-progress detection would go here
+
+                        # --- Retry cap ---
+                        if self.state.iterations_on_current_task >= self.config.max_retries_per_task:
+                            self.state.transition(
+                                RunStatus.PAUSED, reason="max_retries_exceeded"
+                            )
+                            self._save_state()
+                            return self.state
+
+                        # --- No-progress detection ---
+                        fingerprint = self._compute_failure_fingerprint(evaluation)
+                        self._failure_fingerprints.append(fingerprint)
+                        repeat_count = self._failure_fingerprints.count(fingerprint)
+                        if repeat_count >= self.config.no_progress_threshold:
+                            self.state.transition(
+                                RunStatus.PAUSED,
+                                reason=f"no_progress_detected: same failure repeated {repeat_count} times"
+                            )
+                            self._save_state()
+                            return self.state
 
                     case Verdict.REQUEST_REPLAN:
-                        plan_exec = await self.planner.plan(
+                        plan = await self._do_plan(
                             task_description,
-                            cwd=self.project_cwd,
                             replan_context=evaluation.replan_reason,
-                            completed_task_ids=self.state.completed_task_ids,
                         )
-                        plan = plan_exec.result
-                        self._track(plan_exec)
-                        self.state.plan_version += 1
-                        self._adopt_plan(plan)
-                        self._write_artifacts(plan)
-                        self.state.transition(RunStatus.EXECUTING)
-                        self._save_state()
                         break
 
                     case Verdict.HALT_RUN:
@@ -188,6 +260,44 @@ class Orchestrator:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _compute_failure_fingerprint(self, evaluation: EvaluationResult) -> str:
+        """Compute a fingerprint from an evaluation to detect repeated failures."""
+        failed_checks = sorted(
+            cr.name for cr in evaluation.check_results if not cr.passed
+        )
+        feedback_hash = hashlib.md5(
+            evaluation.feedback.strip().lower().encode()
+        ).hexdigest()[:8]
+        return f"{evaluation.verdict.value}:{','.join(failed_checks)}:{feedback_hash}"
+
+    def _load_prior_evaluation(self) -> EvaluationResult | None:
+        """Load the latest evaluation artifact for the current task, if any.
+
+        Used on resume to restore evaluator feedback context so the
+        generator receives the same structured feedback it would have
+        gotten if the run hadn't been interrupted.
+        """
+        if self.state.iterations_on_current_task == 0:
+            return None
+
+        task_index = self.state.current_task_index
+        # Scan for the task directory matching the current index
+        tasks_dir = self.run_dir / "tasks"
+        if not tasks_dir.exists():
+            return None
+
+        for task_dir in sorted(tasks_dir.iterdir()):
+            if task_dir.name.startswith(f"{task_index}_"):
+                # Find the latest evaluation artifact
+                last_iter = self.state.iterations_on_current_task - 1
+                eval_path = task_dir / f"evaluation_iter{last_iter}.json"
+                if eval_path.exists():
+                    data = json.loads(eval_path.read_text(encoding="utf-8"))
+                    return EvaluationResult.from_json(data)
+                break
+
+        return None
 
     def _track(self, execution: StageExecution) -> None:
         """Update cumulative spend and session ID registry from a stage execution."""
@@ -244,9 +354,16 @@ class Orchestrator:
                 text=True,
                 check=True,
             )
-        except subprocess.CalledProcessError:
-            # Commit failures (e.g., nothing to commit) are non-fatal
-            pass
+        except subprocess.CalledProcessError as exc:
+            # Log the failure to the run's logs directory — non-fatal but visible
+            logs_dir = self.run_dir / "logs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            log_path = logs_dir / "git_errors.log"
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(
+                    f"[{_utcnow()}] git checkpoint failed for task '{task.id}': "
+                    f"{exc.stderr or exc.stdout or str(exc)}\n"
+                )
 
     def _save_state(self) -> None:
         """Persist current RunState to ``run_dir/run_state.json``."""
