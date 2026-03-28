@@ -6,53 +6,21 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+# ---------------------------------------------------------------------------
+# Locate bundled template files
+# ---------------------------------------------------------------------------
+
+_TEMPLATES_DIR = Path(__file__).parent / "templates" / "default"
+
+
+def _read_template(relative_path: str) -> str:
+    """Read a file from the bundled default template directory."""
+    return (_TEMPLATES_DIR / relative_path).read_text(encoding="utf-8")
+
 
 # ---------------------------------------------------------------------------
-# Default prompt templates written when scaffolding a new project
+# Lazy-loaded defaults (read from disk only when first needed)
 # ---------------------------------------------------------------------------
-
-_DEFAULT_PLANNER_PROMPT = """\
-You are the Planner agent in an agent harness.
-
-Your job is to take a high-level task description and produce a structured plan:
-- A brief spec / product context
-- An ordered list of tasks, each with a clear title, description, acceptance criteria,
-  dependencies on prior tasks, and a contract (success_criteria + scope_boundaries)
-- Overall acceptance criteria for the entire run
-
-Keep tasks small and independently verifiable. Write the plan as `plan.md` in the run
-directory and return structured JSON in `plan.json`.
-"""
-
-_DEFAULT_GENERATOR_PROMPT = """\
-You are the Generator agent in an agent harness.
-
-Your job is to implement the current task as defined by its contract:
-- Read the contract carefully — success_criteria and scope_boundaries are the definition of "done"
-- Modify the working tree to satisfy all success criteria
-- Do NOT commit to git; the orchestrator owns commits after evaluation passes
-- Write a human-readable summary of what you did to `generation.md`
-
-If you are retrying after an evaluation, the prior EvaluationResult is provided — use the
-structured check_results and scores to target your repairs precisely.
-"""
-
-_DEFAULT_EVALUATOR_PROMPT = """\
-You are the Evaluator agent in an agent harness.
-
-Your job is to evaluate the generator's work against the task contract:
-1. Run deterministic checks: tests, linter, type checker
-2. Perform an AI review of code quality, spec adherence, and security
-3. Aggregate results into per-criterion scores
-4. Emit exactly one verdict:
-   - ADVANCE_TASK   — all blocking checks pass and scores meet thresholds
-   - RETRY_TASK     — task needs rework; provide actionable, structured feedback
-   - REQUEST_REPLAN — the contract itself is flawed; explain why in replan_reason
-   - HALT_RUN       — quality is irrecoverable or further iteration is futile
-
-Write a human-readable report to `evaluation.md` and machine-readable results to
-`evaluation.json`.
-"""
 
 _DEFAULT_CONFIG: dict = {
     "name": "my-project",
@@ -113,11 +81,12 @@ class HarnessConfig:
 
         prompts_dir = project_dir / "prompts"
 
-        def _load_prompt(filename: str, default: str) -> str:
+        def _load_prompt(filename: str) -> str:
             path = prompts_dir / filename
             if path.exists():
                 return path.read_text(encoding="utf-8")
-            return default
+            # Fall back to the bundled template
+            return _read_template(f"prompts/{filename}")
 
         return cls(
             name=raw.get("name", "unnamed"),
@@ -128,9 +97,9 @@ class HarnessConfig:
             planner_tools=list(raw.get("planner_tools", _DEFAULT_CONFIG["planner_tools"])),
             target_repo=raw.get("target_repo"),
             session_mode=raw.get("session_mode", "long_lived"),
-            planner_prompt=_load_prompt("planner.md", _DEFAULT_PLANNER_PROMPT),
-            generator_prompt=_load_prompt("generator.md", _DEFAULT_GENERATOR_PROMPT),
-            evaluator_prompt=_load_prompt("evaluator.md", _DEFAULT_EVALUATOR_PROMPT),
+            planner_prompt=_load_prompt("planner.md"),
+            generator_prompt=_load_prompt("generator.md"),
+            evaluator_prompt=_load_prompt("evaluator.md"),
         )
 
     # ------------------------------------------------------------------
@@ -156,25 +125,21 @@ class HarnessConfig:
         project_dir = Path(project_dir)
         project_dir.mkdir(parents=True, exist_ok=True)
 
-        # config.json
+        # config.json — start from the bundled template, then override name
         config_path = project_dir / "config.json"
         if not config_path.exists():
-            config = dict(_DEFAULT_CONFIG)
+            config = json.loads(_read_template("config.json"))
             config["name"] = name
             config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
-        # prompts/
+        # prompts/ — copy from the bundled default templates
         prompts_dir = project_dir / "prompts"
         prompts_dir.mkdir(exist_ok=True)
 
-        defaults = {
-            "planner.md": _DEFAULT_PLANNER_PROMPT,
-            "generator.md": _DEFAULT_GENERATOR_PROMPT,
-            "evaluator.md": _DEFAULT_EVALUATOR_PROMPT,
-        }
-        for filename, content in defaults.items():
+        for filename in ("planner.md", "generator.md", "evaluator.md"):
             prompt_path = prompts_dir / filename
             if not prompt_path.exists():
+                content = _read_template(f"prompts/{filename}")
                 prompt_path.write_text(content, encoding="utf-8")
 
         # runs/
