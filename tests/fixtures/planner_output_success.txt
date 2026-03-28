@@ -1,0 +1,52 @@
+```json
+{
+  "spec": "Create a minimal Python project consisting of a 'hello.py' script that prints 'Hello, World!' to stdout, and an accompanying test file that verifies this behaviour. No frameworks, build systems, or external dependencies are required beyond the Python standard library and pytest for testing.",
+  "acceptance_criteria": [
+    "Running `python hello.py` prints 'Hello, World!' to stdout and exits with code 0.",
+    "Running `pytest` (or `python -m pytest`) discovers and passes all tests without errors or failures.",
+    "Both `hello.py` and the test file exist in the project root (or a logical, consistent location)."
+  ],
+  "tasks": [
+    {
+      "id": "task-01",
+      "title": "Create hello.py script",
+      "description": "Create a Python file named `hello.py` in the project root. It must define a function (e.g. `main()` or `hello()`) that returns or prints the string 'Hello, World!', and include an `if __name__ == '__main__':` guard that calls that function so the script is both importable and directly executable.",
+      "acceptance_criteria": [
+        "File `hello.py` exists at the project root.",
+        "Running `python hello.py` prints exactly 'Hello, World!' (with a trailing newline) to stdout.",
+        "The script exits with code 0.",
+        "The core logic is encapsulated in a callable function so it can be imported and tested without side-effects."
+      ],
+      "dependencies": [],
+      "contract": {
+        "success_criteria": [
+          "`hello.py` is present and syntactically valid Python.",
+          "`python hello.py` produces the output 'Hello, World!' on stdout.",
+          "The function can be imported (`from hello import hello` or equivalent) without printing anything."
+        ],
+        "scope_boundaries": "In: creating hello.py with a printable function and __main__ guard. Out: test file, CI configuration, packaging, or any external dependencies."
+      }
+    },
+    {
+      "id": "task-02",
+      "title": "Create test file for hello.py",
+      "description": "Create a test file named `test_hello.py` in the project root (or a `tests/` subdirectory if one exists). Using pytest conventions, write at least one test that imports the hello function from `hello.py` and asserts it produces the expected output 'Hello, World!'. Use `capsys` or `io.StringIO` to capture stdout if the function prints rather than returns.",
+      "acceptance_criteria": [
+        "File `test_hello.py` (or `tests/test_hello.py`) exists.",
+        "The test file contains at least one test function prefixed with `test_`.",
+        "Running `pytest` discovers and executes the test(s) with zero failures and zero errors.",
+        "The test explicitly asserts that the output equals 'Hello, World!'."
+      ],
+      "dependencies": ["task-01"],
+      "contract": {
+        "success_criteria": [
+          "`pytest` exits with code 0.",
+          "At least one test function is collected and passes.",
+          "The assertion verifies the exact string 'Hello, World!' produced by the code in hello.py."
+        ],
+        "scope_boundaries": "In: test file using pytest, asserting correct output from hello.py. Out: modifying hello.py, adding CI/CD, installing additional test libraries beyond pytest, or writing more than the minimal passing test suite."
+      }
+    }
+  ]
+}
+```

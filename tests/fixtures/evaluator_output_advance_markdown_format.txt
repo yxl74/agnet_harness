@@ -1,0 +1,23 @@
+All checks have been run. Here is my structured evaluation:
+
+---
+
+## Verdict
+ADVANCE_TASK
+
+## Scores
+correctness: 1.0
+code_quality: 1.0
+test_coverage: 1.0
+spec_adherence: 1.0
+
+## Check Results
+- pytest: PASS — `test_hello.py::test_hello_returns_expected_string PASSED` (exit code 0, 1 test collected and passed)
+- lint: PASS — ruff reports "All checks passed!" (exit code 0)
+- ai_review: PASS — Test is minimal, correct, idiomatic pytest, and directly asserts `'Hello, World!'` from the imported `hello()` function
+
+## Feedback
+N/A
+
+## Replan Reason
+N/A
