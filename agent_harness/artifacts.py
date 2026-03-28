@@ -1,7 +1,11 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Self
+from typing import Generic, Self, TypeVar
 import json
+
+T = TypeVar("T")
 
 
 @dataclass
@@ -182,6 +186,13 @@ class CheckResult:
             severity=data["severity"],
         )
 
+    def to_markdown(self) -> str:
+        status = "PASS" if self.passed else "FAIL"
+        lines = [f"**{self.name}** [{self.severity}]: {status}"]
+        if self.output:
+            lines.append(f"```\n{self.output}\n```")
+        return "\n".join(lines)
+
 
 @dataclass
 class EvaluationResult:
@@ -279,7 +290,7 @@ class UsageInfo:
 
 
 @dataclass
-class StageExecution[T]:
+class StageExecution(Generic[T]):
     result: T
     usage: UsageInfo
     session_key: str    # Logical key, e.g. "planner:v1", "generator:task-01"
