@@ -302,6 +302,13 @@ async def get_run_detail(name: str, run_id: str) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# Active run tracking (for cancellation)
+# ---------------------------------------------------------------------------
+
+_active_runs: dict[str, asyncio.Task] = {}  # key: "project/run_id"
+
+
+# ---------------------------------------------------------------------------
 # Route: start a new run
 # ---------------------------------------------------------------------------
 
@@ -417,14 +424,59 @@ async def start_run(name: str, request: RunRequest) -> JSONResponse:
         )
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    asyncio.create_task(
+    run_key = f"{name}/{run_id}"
+    task_handle = asyncio.create_task(
         _run_orchestrator(name, request.task, run_id, projects_dir)
     )
+    _active_runs[run_key] = task_handle
+    task_handle.add_done_callback(lambda _: _active_runs.pop(run_key, None))
 
     return JSONResponse(
         status_code=202,
         content={"run_id": run_id, "status": "accepted"},
     )
+
+
+@app.post("/api/projects/{name}/runs/{run_id}/stop")
+async def stop_run(name: str, run_id: str) -> JSONResponse:
+    """Stop a running harness run."""
+    run_key = f"{name}/{run_id}"
+    task_handle = _active_runs.get(run_key)
+
+    if not task_handle:
+        raise HTTPException(status_code=404, detail=f"No active run '{run_id}' for project '{name}'.")
+
+    task_handle.cancel()
+    _active_runs.pop(run_key, None)
+
+    # Update run state to paused
+    projects_dir = _projects_dir()
+    state_path = projects_dir / name / "runs" / run_id / "run_state.json"
+    if state_path.exists():
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["status"] = "paused"
+        state["status_reason"] = "user_cancelled"
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+    return JSONResponse(content={"run_id": run_id, "status": "stopped"})
+
+
+@app.delete("/api/projects/{name}/runs/{run_id}")
+async def delete_run(name: str, run_id: str) -> JSONResponse:
+    """Delete a run's artifacts."""
+    run_key = f"{name}/{run_id}"
+    if run_key in _active_runs:
+        raise HTTPException(status_code=409, detail="Cannot delete an active run. Stop it first.")
+
+    projects_dir = _projects_dir()
+    run_dir = projects_dir / name / "runs" / run_id
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found.")
+
+    import shutil
+    shutil.rmtree(run_dir)
+    return JSONResponse(content={"deleted": run_id})
 
 
 # ---------------------------------------------------------------------------

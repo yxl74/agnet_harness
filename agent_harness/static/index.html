@@ -845,6 +845,7 @@
       Projects &rsaquo; <span id="monitor-project-name"></span> &rsaquo; <span id="monitor-run-id"></span>
       <button class="btn-secondary btn-small" id="back-to-runs-btn" style="margin-left:auto;">Back</button>
       <button class="btn-secondary btn-small" id="refresh-btn">Refresh</button>
+      <button class="btn-small" id="stop-current-run-btn" style="background:var(--danger);color:#fff;display:none;">Stop Run</button>
     </div>
 
     <!-- Status Bar -->
@@ -1074,17 +1075,22 @@ async function loadAllRuns() {
     if (!allRuns.length) { list.innerHTML = '<div class="empty-state">No runs across any project.</div>'; return; }
     // Sort by run_id descending (newest first)
     allRuns.sort((a, b) => b.run_id.localeCompare(a.run_id));
-    list.innerHTML = allRuns.map(r => `
-      <div class="run-row">
-        <div>
-          <div class="run-id">${esc(r._project)} / ${esc(r.run_id)}</div>
-          <div class="run-meta">${esc(r.current_phase || '')}</div>
-        </div>
+    list.innerHTML = allRuns.map(r => {
+      const isRunning = ['planning','executing'].includes((r.status||'').toLowerCase());
+      const stopBtn = isRunning
+        ? `<button class="btn-small" style="background:var(--danger);color:#fff;" onclick="stopRun('${esc(r._project)}','${esc(r.run_id)}')">Stop</button>` : '';
+      const delBtn = !isRunning
+        ? `<button class="btn-small" style="color:var(--danger);border:1px solid var(--danger);background:none;" onclick="deleteRun('${esc(r._project)}','${esc(r.run_id)}')">Delete</button>` : '';
+      return `<div class="run-row">
+        <div><div class="run-id">${esc(r._project)} / ${esc(r.run_id)}</div><div class="run-meta">${esc(r.current_phase || '')}</div></div>
         <div>${badge(r.status)}</div>
         <div class="run-meta">${r.completed_tasks}/${r.total_tasks} tasks &bull; $${(r.cumulative_spend_usd||0).toFixed(4)}</div>
-        <button class="btn-secondary btn-small" onclick="openMonitor('${esc(r._project)}','${esc(r.run_id)}')">Monitor</button>
-      </div>
-    `).join('');
+        <div style="display:flex;gap:.3rem;">
+          <button class="btn-secondary btn-small" onclick="openMonitor('${esc(r._project)}','${esc(r.run_id)}')">Monitor</button>
+          ${stopBtn}${delBtn}
+        </div>
+      </div>`;
+    }).join('');
   } catch (err) {
     list.innerHTML = `<div class="empty-state" style="color:var(--danger)">${esc(String(err))}</div>`;
   }
@@ -1097,14 +1103,22 @@ async function loadRuns() {
     const res = await fetch(`/api/projects/${enc(currentProject)}/runs`);
     const runs = await res.json();
     if (!runs.length) { list.innerHTML = '<div class="empty-state">No runs yet.</div>'; return; }
-    list.innerHTML = runs.reverse().map(r => `
-      <div class="run-row">
+    list.innerHTML = runs.reverse().map(r => {
+      const isRunning = ['planning','executing'].includes((r.status||'').toLowerCase());
+      const stopBtn = isRunning
+        ? `<button class="btn-small" style="background:var(--danger);color:#fff;" onclick="stopRun('${esc(currentProject)}','${esc(r.run_id)}')">Stop</button>` : '';
+      const delBtn = !isRunning
+        ? `<button class="btn-small" style="color:var(--danger);border:1px solid var(--danger);background:none;" onclick="deleteRun('${esc(currentProject)}','${esc(r.run_id)}')">Delete</button>` : '';
+      return `<div class="run-row">
         <div><div class="run-id">${esc(r.run_id)}</div><div class="run-meta">${esc(r.current_phase || '')}</div></div>
         <div>${badge(r.status)}</div>
         <div class="run-meta">${r.completed_tasks}/${r.total_tasks} tasks &bull; $${(r.cumulative_spend_usd||0).toFixed(4)}</div>
-        <button class="btn-secondary btn-small" onclick="openMonitor('${esc(currentProject)}','${esc(r.run_id)}')">Monitor</button>
-      </div>
-    `).join('');
+        <div style="display:flex;gap:.3rem;">
+          <button class="btn-secondary btn-small" onclick="openMonitor('${esc(currentProject)}','${esc(r.run_id)}')">Monitor</button>
+          ${stopBtn}${delBtn}
+        </div>
+      </div>`;
+    }).join('');
   } catch (err) {
     list.innerHTML = `<div class="empty-state" style="color:var(--danger)">${esc(String(err))}</div>`;
   }
@@ -1188,6 +1202,10 @@ async function getRunDetail() {
 
 function renderMonitor(detail) {
   const s = detail.state || {};
+
+  // Show/hide stop button
+  const isRunning = ['planning','executing'].includes((s.status||'').toLowerCase());
+  $('#stop-current-run-btn').style.display = isRunning ? '' : 'none';
 
   // Stat cards
   $('#mon-status').innerHTML = badge(s.status);
@@ -1309,8 +1327,38 @@ async function refreshMonitor() {
   }
 }
 
+async function stopRun(proj, runId) {
+  if (!confirm(`Stop run ${runId}?`)) return;
+  try {
+    const res = await fetch(`/api/projects/${enc(proj)}/runs/${enc(runId)}/stop`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail);
+    toast(`Run ${runId} stopped.`);
+    // Refresh whichever view is active
+    if (currentProject) await loadRuns();
+    else await loadAllRuns();
+  } catch (err) { toast(`Error: ${err.message}`, 5000); }
+}
+
+async function deleteRun(proj, runId) {
+  if (!confirm(`Delete run ${runId} and all its artifacts? This cannot be undone.`)) return;
+  try {
+    const res = await fetch(`/api/projects/${enc(proj)}/runs/${enc(runId)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail);
+    toast(`Run ${runId} deleted.`);
+    if (currentProject) await loadRuns();
+    else await loadAllRuns();
+  } catch (err) { toast(`Error: ${err.message}`, 5000); }
+}
+
 $('#refresh-btn').addEventListener('click', refreshMonitor);
 $('#back-to-runs-btn').addEventListener('click', () => { clearInterval(pollInterval); openRuns(currentProject); });
+$('#stop-current-run-btn').addEventListener('click', async () => {
+  if (!currentProject || !currentRunId) return;
+  await stopRun(currentProject, currentRunId);
+  await refreshMonitor();
+});
 
 // ── Pipeline Visualization ──────────────────────
 let configuredProject = null;
