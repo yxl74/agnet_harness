@@ -426,29 +426,28 @@ async def configure_project(websocket: WebSocket) -> None:
     )
 
     try:
-        project_name = await _sdk_configure(websocket, description, sdk, target_repo=target_repo)
-        # Verify the project was actually created before declaring success
-        project_dir = _projects_dir() / project_name
-        config_path = project_dir / "config.json"
-        if not config_path.exists():
-            # Fallback: scaffold the project so the user's conversation isn't wasted
-            from agent_harness.config import HarnessConfig
-            await websocket.send_json({
-                "type": "message",
-                "text": f"Config wasn't written to {config_path}. Creating default scaffold for '{project_name}'...",
-            })
-            HarnessConfig.scaffold_project(project_dir, name=project_name)
-            if target_repo:
-                # Patch target_repo into the scaffolded config
-                cfg = json.loads(config_path.read_text(encoding="utf-8"))
-                cfg["target_repo"] = target_repo
-                config_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        raw_name = await _sdk_configure(websocket, description, sdk, target_repo=target_repo)
+
+        # --- Verify the project actually exists ---
+        # The name from the agent may not match the actual directory.
+        # Strategy: check the exact name first, then scan for recently
+        # created projects, then fall back to scaffold.
+        projects_dir = _projects_dir()
+        project_name = _find_or_create_project(
+            projects_dir, raw_name, description, target_repo, websocket
+        )
         await websocket.send_json({"type": "done", "project_name": project_name})
     except WebSocketDisconnect:
         return
     except Exception as exc:  # noqa: BLE001
-        await websocket.send_json({"type": "error", "text": str(exc)})
+        try:
+            await websocket.send_json({"type": "error", "text": str(exc)})
+        except Exception:
+            pass
     finally:
+        # Small delay so the frontend processes 'done' before 'close'
+        import asyncio
+        await asyncio.sleep(0.2)
         try:
             await websocket.close()
         except Exception:  # noqa: BLE001
@@ -568,6 +567,59 @@ When completely done, output: PROJECT_NAME: <name>
 The projects directory is at: {projects_dir}
 All project files MUST be written under: {projects_dir}/<project-name>/
 """
+
+
+async def _find_or_create_project(
+    projects_dir: Path,
+    raw_name: str,
+    description: str,
+    target_repo: str | None,
+    websocket: WebSocket,
+) -> str:
+    """Find the project the configurator created, or scaffold one as fallback.
+
+    The agent may have created the project under a slightly different name
+    than what it output as PROJECT_NAME. This function checks:
+    1. Exact name match
+    2. Any new project created during this session (by modified time)
+    3. Fallback: scaffold with the raw name
+    """
+    from agent_harness.config import HarnessConfig
+
+    # 1. Exact match
+    exact = projects_dir / raw_name
+    if (exact / "config.json").exists():
+        return raw_name
+
+    # 2. Scan for any project with config.json (may have been created with
+    #    a different name — underscores, different casing, etc.)
+    if projects_dir.exists():
+        candidates = []
+        for entry in projects_dir.iterdir():
+            if entry.is_dir() and (entry / "config.json").exists():
+                candidates.append(entry)
+        # Check if any project was created in the last 60 seconds
+        import time
+        now = time.time()
+        recent = [c for c in candidates if now - c.stat().st_mtime < 60]
+        if recent:
+            # Pick the most recently modified
+            best = max(recent, key=lambda c: c.stat().st_mtime)
+            return best.name
+
+    # 3. Fallback: scaffold
+    await websocket.send_json({
+        "type": "message",
+        "text": f"Project files not found. Creating scaffold for '{raw_name}'...",
+    })
+    project_dir = projects_dir / raw_name
+    HarnessConfig.scaffold_project(project_dir, name=raw_name)
+    if target_repo:
+        config_path = project_dir / "config.json"
+        cfg = json.loads(config_path.read_text(encoding="utf-8"))
+        cfg["target_repo"] = target_repo
+        config_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    return raw_name
 
 
 def _summarize_tool_use(tool_name: str, tool_input: dict) -> str:

@@ -940,14 +940,36 @@ async function viewPipeline(name) {
   await loadPipelineForProject(name);
 }
 
+let _pipelineLoadTimer = null;
+
 async function loadPipelineForProject(name) {
+  // Debounce: if called multiple times rapidly (done + close race), only run once
+  if (_pipelineLoadTimer) clearTimeout(_pipelineLoadTimer);
+  await new Promise(resolve => {
+    _pipelineLoadTimer = setTimeout(resolve, 100);
+  });
+
   try {
     const res = await fetch(`/api/projects/${enc(name)}/config`);
-    if (!res.ok) return;
+    if (!res.ok) {
+      console.warn(`Pipeline load failed for '${name}': HTTP ${res.status}`);
+      $('#pipeline-empty').innerHTML =
+        `Could not load config for "${esc(name)}" (HTTP ${res.status}).<br>` +
+        '<button class="btn-secondary btn-small" style="margin-top:.5rem;" ' +
+        `onclick="$('#refresh-pipeline-btn').click()">Try Refresh</button>`;
+      $('#pipeline-empty').style.display = '';
+      $('#pipeline-content').style.display = 'none';
+      return;
+    }
     const data = await res.json();
     configuredProject = name;
     renderPipeline(data.config, data.prompts);
-  } catch { /* ignore */ }
+  } catch (err) {
+    console.error('Pipeline load error:', err);
+    $('#pipeline-empty').innerHTML = `Error loading pipeline: ${esc(String(err))}`;
+    $('#pipeline-empty').style.display = '';
+    $('#pipeline-content').style.display = 'none';
+  }
 }
 
 function renderPipeline(config, prompts) {
