@@ -659,12 +659,13 @@
     <div id="start-run-form" style="display:none;" class="card">
       <div class="card-title" style="margin-bottom:.75rem;">Start New Run</div>
       <div class="form-group">
-        <label for="task-input">Task description</label>
-        <textarea id="task-input" rows="3" placeholder="Describe what you want the agent to build or do..."></textarea>
+        <label for="task-input">Task description <span id="task-source" style="font-size:.72rem;color:var(--accent);"></span></label>
+        <textarea id="task-input" rows="4" placeholder="Describe what you want the agent to build or do..."></textarea>
       </div>
       <div class="form-row">
-        <button class="btn-primary" id="submit-run-btn">Start</button>
+        <button class="btn-primary" id="submit-run-btn">Start Run</button>
         <button class="btn-secondary" id="cancel-run-btn">Cancel</button>
+        <button class="btn-secondary" id="back-to-configure-btn" style="margin-left:auto;">Back to Configure</button>
       </div>
     </div>
     <div id="runs-list"><div class="empty-state">No runs yet.</div></div>
@@ -877,6 +878,10 @@ async function loadRuns() {
 
 $('#start-run-btn').addEventListener('click', () => { $('#start-run-form').style.display = ''; $('#task-input').focus(); });
 $('#cancel-run-btn').addEventListener('click', () => { $('#start-run-form').style.display = 'none'; });
+$('#back-to-configure-btn').addEventListener('click', () => {
+  if (currentProject) viewPipeline(currentProject);
+  else { showView('configure'); $$('[data-nav]').forEach(a => a.classList.toggle('active', a.dataset.nav === 'configure')); }
+});
 
 $('#submit-run-btn').addEventListener('click', async () => {
   const task = $('#task-input').value.trim();
@@ -894,7 +899,27 @@ $('#submit-run-btn').addEventListener('click', async () => {
   finally { btn.disabled = false; btn.textContent = 'Start'; }
 });
 
-function openNewRunFor(name) { openRuns(name).then(() => { $('#start-run-form').style.display = ''; $('#task-input').focus(); }); }
+async function openNewRunFor(name) {
+  await openRuns(name);
+  $('#start-run-form').style.display = '';
+
+  // Pre-fill task from config if available
+  try {
+    const res = await fetch(`/api/projects/${enc(name)}/config`);
+    if (res.ok) {
+      const data = await res.json();
+      const task = data.config.task_description;
+      if (task) {
+        $('#task-input').value = task;
+        $('#task-source').textContent = '(from configurator)';
+      } else {
+        $('#task-source').textContent = '';
+      }
+    }
+  } catch { /* ignore */ }
+
+  $('#task-input').focus();
+}
 
 // ── Monitor ─────────────────────────────────────
 async function openMonitor(proj, runId) {
