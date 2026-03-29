@@ -718,8 +718,26 @@ $$('[data-nav]').forEach(a => {
     e.preventDefault();
     showView(a.dataset.nav);
     if (a.dataset.nav === 'projects') loadProjects();
+    if (a.dataset.nav === 'configure') autoLoadPipeline();
   });
 });
+
+async function autoLoadPipeline() {
+  // If a project is already selected, load it
+  if (configuredProject) { await loadPipelineForProject(configuredProject); return; }
+  // Otherwise, auto-detect: if exactly one project exists, load it
+  try {
+    const res = await fetch('/api/projects');
+    const projects = await res.json();
+    if (projects.length === 1) {
+      await loadPipelineForProject(projects[0].name);
+    } else if (projects.length > 1) {
+      $('#pipeline-empty').innerHTML =
+        'Select a project to view its pipeline:<br><br>' +
+        projects.map(p => `<button class="btn-secondary btn-small" style="margin:.2rem;" onclick="viewPipeline('${esc(p.name)}')">${esc(p.name)}</button>`).join('');
+    }
+  } catch { /* ignore */ }
+}
 
 let currentProject = null, currentRunId = null, pollInterval = null;
 
@@ -937,8 +955,25 @@ function setStageConfigured(nodeId, statusId, configured) {
   }
 }
 
-$('#refresh-pipeline-btn').addEventListener('click', () => {
-  if (configuredProject) loadPipelineForProject(configuredProject);
+$('#refresh-pipeline-btn').addEventListener('click', async () => {
+  if (configuredProject) {
+    await loadPipelineForProject(configuredProject);
+    return;
+  }
+  // No project selected — try to auto-detect from existing projects
+  try {
+    const res = await fetch('/api/projects');
+    const projects = await res.json();
+    if (projects.length === 1) {
+      await loadPipelineForProject(projects[0].name);
+    } else if (projects.length > 1) {
+      // Show a selector in the pipeline empty state
+      const names = projects.map(p => p.name);
+      $('#pipeline-empty').innerHTML =
+        'Select a project to view its pipeline:<br><br>' +
+        names.map(n => `<button class="btn-secondary btn-small" style="margin:.2rem;" onclick="viewPipeline('${esc(n)}')">${esc(n)}</button>`).join('');
+    }
+  } catch { /* ignore */ }
 });
 
 $('#launch-btn').addEventListener('click', () => {
