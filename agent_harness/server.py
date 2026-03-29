@@ -110,6 +110,34 @@ async def list_projects() -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# Route: get project config (for pipeline visualization)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/projects/{name}/config")
+async def get_project_config(name: str) -> JSONResponse:
+    """Return the full project config, prompts, and evaluation dimensions."""
+    projects_dir = _projects_dir()
+    project_dir = projects_dir / name
+    config_path = project_dir / "config.json"
+
+    if not config_path.exists():
+        raise HTTPException(status_code=404, detail=f"Project '{name}' config not found.")
+
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+
+    # Also load prompt summaries (first 200 chars of each)
+    prompts: dict[str, str] = {}
+    prompts_dir = project_dir / "prompts"
+    if prompts_dir.exists():
+        for md_file in prompts_dir.glob("*.md"):
+            text = md_file.read_text(encoding="utf-8")
+            prompts[md_file.stem] = text[:200] + ("..." if len(text) > 200 else "")
+
+    return JSONResponse(content={"config": config, "prompts": prompts})
+
+
+# ---------------------------------------------------------------------------
 # Route: list runs for a project
 # ---------------------------------------------------------------------------
 
