@@ -48,7 +48,7 @@ class HarnessConfig:
     evaluator_tools: list[str]
     planner_tools: list[str]
     target_repo: str | None          # Path to existing repo, or None for greenfield
-    session_mode: str                # "long_lived" or "fresh"
+    session_mode: str                # Reserved for future use. Generator is always long-lived-per-task, evaluator always fresh.
     planner_prompt: str              # System prompt content (loaded from .md file)
     generator_prompt: str
     evaluator_prompt: str

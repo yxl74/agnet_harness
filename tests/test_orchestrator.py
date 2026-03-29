@@ -1067,3 +1067,78 @@ async def test_fingerprint_resets_on_new_task(tmp_path, two_task_plan):
     assert state.status == RunStatus.COMPLETED
     assert "t1" in state.completed_task_ids
     assert "t2" in state.completed_task_ids
+
+
+@pytest.mark.asyncio
+async def test_alternating_feedback_does_not_trigger_no_progress(tmp_path, simple_plan):
+    """A, B, A pattern should NOT trigger no-progress (consecutive streak, not total count)."""
+    config = _make_retries_config(max_retries_per_task=6, no_progress_threshold=2)
+
+    mock_planner = AsyncMock()
+    mock_planner.plan.return_value = _planner_exec(simple_plan)
+
+    mock_generator = AsyncMock()
+    mock_generator.generate.return_value = _generator_exec()
+
+    # Alternating: A, B, A, B, A, B — never 2 consecutive identical, should hit max_retries
+    mock_evaluator = AsyncMock()
+    mock_evaluator.evaluate.side_effect = [
+        _retry_eval_exec(feedback="error A"),
+        _retry_eval_exec(feedback="error B"),
+        _retry_eval_exec(feedback="error A"),
+        _retry_eval_exec(feedback="error B"),
+        _retry_eval_exec(feedback="error A"),
+        _retry_eval_exec(feedback="error B"),
+        _retry_eval_exec(feedback="error A"),
+    ]
+
+    orchestrator = _make_orchestrator(tmp_path, config, mock_planner, mock_generator, mock_evaluator)
+    state = await orchestrator.run("test task")
+
+    assert state.status == RunStatus.PAUSED
+    assert state.status_reason == "max_retries_exceeded"
+
+
+# ---------------------------------------------------------------------------
+# Stage failure tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_planner_exception_results_in_failed_state(tmp_path, mock_config):
+    """A stage exception (e.g., ValueError from structured output) should
+    be caught and persisted as RunStatus.FAILED, not crash the process."""
+    mock_planner = AsyncMock()
+    mock_planner.plan.side_effect = ValueError("Planner returned invalid JSON")
+
+    mock_generator = AsyncMock()
+    mock_evaluator = AsyncMock()
+
+    orchestrator = _make_orchestrator(tmp_path, mock_config, mock_planner, mock_generator, mock_evaluator)
+    state = await orchestrator.run("test task")
+
+    assert state.status == RunStatus.FAILED
+    assert "ValueError" in state.status_reason
+    assert "invalid JSON" in state.status_reason
+    # State should be persisted to disk
+    state_path = orchestrator.run_dir / "run_state.json"
+    assert state_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_evaluator_exception_results_in_failed_state(tmp_path, mock_config, simple_plan):
+    """Evaluator raising ValueError (bad structured output) should FAIL the run."""
+    mock_planner = AsyncMock()
+    mock_planner.plan.return_value = _planner_exec(simple_plan)
+
+    mock_generator = AsyncMock()
+    mock_generator.generate.return_value = _generator_exec()
+
+    mock_evaluator = AsyncMock()
+    mock_evaluator.evaluate.side_effect = ValueError("Evaluator returned invalid JSON")
+
+    orchestrator = _make_orchestrator(tmp_path, mock_config, mock_planner, mock_generator, mock_evaluator)
+    state = await orchestrator.run("test task")
+
+    assert state.status == RunStatus.FAILED
+    assert "ValueError" in state.status_reason

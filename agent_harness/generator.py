@@ -75,8 +75,8 @@ class DefaultGenerator:
             self._current_task_id = task.id
             self._task_iteration = 0
 
-        self._task_iteration += 1
         session_key = f"generator:{task.id}:iter-{self._task_iteration}"
+        self._task_iteration += 1
 
         prompt = self._build_prompt(task, prior_evaluation)
 
@@ -86,9 +86,9 @@ class DefaultGenerator:
 
         try:
             from claude_agent_sdk import (  # type: ignore[import]
-                AssistantMessage,
                 ClaudeAgentOptions,
                 ResultMessage,
+                SystemMessage,
                 query,
             )
 
@@ -109,28 +109,27 @@ class DefaultGenerator:
             ):
                 if isinstance(message, ResultMessage):
                     result_text = message.result or ""
-                elif isinstance(message, AssistantMessage):
-                    if message.usage:
-                        total_usage.input_tokens += message.usage.get(
-                            "input_tokens", 0
-                        )
-                        total_usage.output_tokens += message.usage.get(
-                            "output_tokens", 0
-                        )
-                # Capture session_id from init message
-                if (
-                    hasattr(message, "data")
-                    and message.data
-                    and "session_id" in message.data
-                ):
-                    session_id = message.data["session_id"]
+                    # ResultMessage has session_id directly as a field
+                    session_id = message.session_id
                     self._session_id = session_id  # persist for retries
+                    # Use SDK-provided aggregated usage
+                    if message.usage:
+                        total_usage.input_tokens = message.usage.get("input_tokens", 0)
+                        total_usage.output_tokens = message.usage.get("output_tokens", 0)
+                    if message.total_cost_usd is not None:
+                        total_usage.spend_usd = message.total_cost_usd
+                elif isinstance(message, SystemMessage) and message.subtype == "init":
+                    if "session_id" in message.data:
+                        session_id = message.data["session_id"]
+                        self._session_id = session_id
 
         except ImportError:
             result_text = ""
 
         gen_result = self._parse_result(result_text, task)
-        total_usage.spend_usd = _compute_cost(self.model, total_usage)
+        # Only compute cost if SDK didn't already provide it
+        if total_usage.spend_usd == 0.0:
+            total_usage.spend_usd = _compute_cost(self.model, total_usage)
 
         return StageExecution(
             result=gen_result,

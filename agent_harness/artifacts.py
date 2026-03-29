@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from enum import Enum
 from typing import Generic, Self, TypeVar
 import json
@@ -44,8 +44,7 @@ class Task:
     contract: Contract              # Planner-authored definition of "done"
 
     def to_json(self) -> dict:
-        d = asdict(self)
-        return d
+        return asdict(self)
 
     @classmethod
     def from_json(cls, data: dict) -> Self:
@@ -209,7 +208,7 @@ class EvaluationResult:
             "task_id": self.task_id,
             "verdict": self.verdict.value,
             "scores": self.scores,
-            "check_results": [asdict(c) for c in self.check_results],
+            "check_results": [c.to_json() for c in self.check_results],
             "feedback": self.feedback,
             "replan_reason": self.replan_reason,
             "raw_text": self.raw_text,

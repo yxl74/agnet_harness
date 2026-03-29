@@ -100,12 +100,16 @@ class Orchestrator:
 
     async def run(self, task_description: str) -> RunState:
         """Start a new harness run: plan from scratch, then execute tasks."""
-
-        # ---- Phase 1: Plan ----
-        plan = await self._do_plan(task_description)
-
-        # ---- Phase 2: Execute tasks ----
-        return await self._execute_tasks(task_description, plan)
+        try:
+            plan = await self._do_plan(task_description)
+            return await self._execute_tasks(task_description, plan)
+        except Exception as exc:
+            self.state.transition(
+                RunStatus.FAILED,
+                reason=f"Stage error: {type(exc).__name__}: {exc}",
+            )
+            self._save_state()
+            return self.state
 
     async def resume_run(self, task_description: str) -> RunState:
         """Resume an existing run from persisted state.
@@ -114,22 +118,32 @@ class Orchestrator:
         continues from the current task index without re-invoking the
         planner. If planning never completed (e.g., FAILED during
         planning), restarts from the planning phase.
+
+        Note: The generator's SDK conversation session is NOT restored
+        across process restarts — it starts a fresh session. However, the
+        prior evaluation feedback IS restored from persisted artifacts,
+        which provides the meaningful context for retry behavior.
         """
-        plan_path = self.run_dir / "plan.json"
+        try:
+            plan_path = self.run_dir / "plan.json"
 
-        if not plan_path.exists():
-            # Planning never completed — restart from plan phase
-            plan = await self._do_plan(task_description)
-        else:
-            plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
-            plan = Plan.from_json(plan_data)
-            self.state.transition(RunStatus.EXECUTING)
+            if not plan_path.exists():
+                plan = await self._do_plan(task_description)
+            else:
+                plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
+                plan = Plan.from_json(plan_data)
+                self.state.transition(RunStatus.EXECUTING)
+                self._save_state()
+
+            prior_evaluation = self._load_prior_evaluation()
+            return await self._execute_tasks(task_description, plan, prior_evaluation)
+        except Exception as exc:
+            self.state.transition(
+                RunStatus.FAILED,
+                reason=f"Stage error: {type(exc).__name__}: {exc}",
+            )
             self._save_state()
-
-        # Restore prior evaluation context if resuming a retried task
-        prior_evaluation = self._load_prior_evaluation()
-
-        return await self._execute_tasks(task_description, plan, prior_evaluation)
+            return self.state
 
     async def _do_plan(
         self,
@@ -227,14 +241,20 @@ class Orchestrator:
                             self._save_state()
                             return self.state
 
-                        # --- No-progress detection ---
+                        # --- No-progress detection (consecutive streak) ---
                         fingerprint = self._compute_failure_fingerprint(evaluation)
                         self._failure_fingerprints.append(fingerprint)
-                        repeat_count = self._failure_fingerprints.count(fingerprint)
-                        if repeat_count >= self.config.no_progress_threshold:
+                        # Count consecutive identical fingerprints at the tail
+                        streak = 0
+                        for fp in reversed(self._failure_fingerprints):
+                            if fp == fingerprint:
+                                streak += 1
+                            else:
+                                break
+                        if streak >= self.config.no_progress_threshold:
                             self.state.transition(
                                 RunStatus.PAUSED,
-                                reason=f"no_progress_detected: same failure repeated {repeat_count} times"
+                                reason=f"no_progress_detected: same failure repeated {streak} consecutive times"
                             )
                             self._save_state()
                             return self.state

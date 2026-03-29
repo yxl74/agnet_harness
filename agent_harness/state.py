@@ -84,8 +84,22 @@ class RunState:
         """Deserialize a RunState from a JSON file."""
         path = Path(path)
         data = json.loads(path.read_text(encoding="utf-8"))
-        data["status"] = RunStatus(data["status"])
-        return cls(**data)
+        return cls(
+            run_id=data["run_id"],
+            status=RunStatus(data["status"]),
+            status_reason=data.get("status_reason"),
+            current_phase=data.get("current_phase", "planning"),
+            current_task_index=data.get("current_task_index", 0),
+            total_tasks=data.get("total_tasks", 0),
+            iterations_on_current_task=data.get("iterations_on_current_task", 0),
+            plan_version=data.get("plan_version", 0),
+            completed_task_ids=data.get("completed_task_ids", []),
+            cumulative_spend_usd=data.get("cumulative_spend_usd", 0.0),
+            session_ids=data.get("session_ids", {}),
+            artifact_manifest=data.get("artifact_manifest", []),
+            started_at=data["started_at"],
+            updated_at=data["updated_at"],
+        )
 
     # ------------------------------------------------------------------
     # State transitions
@@ -105,4 +119,9 @@ class RunState:
             self.current_phase = "done"
         else:
             self.current_phase = f"task_{self.current_task_index}"
+        self.updated_at = _utcnow()
+
+    def record_attempt(self) -> None:
+        """Record a generate/evaluate attempt on the current task."""
+        self.iterations_on_current_task += 1
         self.updated_at = _utcnow()

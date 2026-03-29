@@ -1,0 +1,26 @@
+{
+  "name": "test-live",
+  "model": "claude-sonnet-4-6",
+  "max_budget_usd": 2.0,
+  "generator_tools": [
+    "Read",
+    "Write",
+    "Edit",
+    "Bash",
+    "Glob",
+    "Grep"
+  ],
+  "evaluator_tools": [
+    "Read",
+    "Bash",
+    "Glob",
+    "Grep"
+  ],
+  "planner_tools": [
+    "Read",
+    "Glob",
+    "Grep"
+  ],
+  "target_repo": null,
+  "session_mode": "long_lived"
+}

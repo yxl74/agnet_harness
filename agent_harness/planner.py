@@ -145,6 +145,7 @@ class DefaultPlanner:
 
         total_usage = UsageInfo(input_tokens=0, output_tokens=0, spend_usd=0.0)
         result_text = ""
+        structured_data: dict | None = None
         session_id = ""
 
         if not self.structured_output:
@@ -155,9 +156,9 @@ class DefaultPlanner:
 
         try:
             from claude_agent_sdk import (  # type: ignore[import]
-                AssistantMessage,
                 ClaudeAgentOptions,
                 ResultMessage,
+                SystemMessage,
                 query,
             )
 
@@ -177,32 +178,38 @@ class DefaultPlanner:
             ):
                 if isinstance(message, ResultMessage):
                     result_text = message.result or ""
-                elif isinstance(message, AssistantMessage):
+                    # SDK populates structured_output with parsed JSON when output_format is set
+                    if self.structured_output and message.structured_output is not None:
+                        structured_data = message.structured_output
+                    # ResultMessage has session_id directly as a field
+                    session_id = message.session_id
+                    # Use SDK-provided aggregated usage instead of manual summation
                     if message.usage:
-                        total_usage.input_tokens += message.usage.get(
-                            "input_tokens", 0
-                        )
-                        total_usage.output_tokens += message.usage.get(
-                            "output_tokens", 0
-                        )
-                # Capture session_id from init message
-                if (
-                    hasattr(message, "data")
-                    and message.data
-                    and "session_id" in message.data
-                ):
-                    session_id = message.data["session_id"]
+                        total_usage.input_tokens = message.usage.get("input_tokens", 0)
+                        total_usage.output_tokens = message.usage.get("output_tokens", 0)
+                    if message.total_cost_usd is not None:
+                        total_usage.spend_usd = message.total_cost_usd
+                elif isinstance(message, SystemMessage) and message.subtype == "init":
+                    # Also capture session_id from init message as early signal
+                    if "session_id" in message.data:
+                        session_id = message.data["session_id"]
 
         except ImportError:
             # SDK not installed — callers using mocks should patch query directly
             result_text = ""
 
         if self.structured_output:
-            plan = self._parse_plan_structured(result_text, task)
+            if structured_data is not None:
+                plan = self._parse_plan_from_dict(structured_data, task, result_text)
+            else:
+                # Fallback: try parsing result_text as JSON
+                plan = self._parse_plan_structured(result_text, task)
         else:
             plan = self._parse_plan(result_text, task)
 
-        total_usage.spend_usd = _compute_cost(self.model, total_usage)
+        # Only compute cost if SDK didn't already provide it
+        if total_usage.spend_usd == 0.0:
+            total_usage.spend_usd = _compute_cost(self.model, total_usage)
 
         return StageExecution(
             result=plan,
@@ -275,6 +282,30 @@ class DefaultPlanner:
             ]
 
         return "\n".join(lines)
+
+    def _parse_plan_from_dict(self, data: dict, task_description: str, raw_text: str) -> Plan:
+        """Construct a Plan from a pre-parsed dict (from SDK structured_output field)."""
+        tasks = [
+            Task(
+                id=t.get("id", f"task-{i+1:02d}"),
+                title=t.get("title", f"Task {i+1}"),
+                description=t.get("description", ""),
+                acceptance_criteria=t.get("acceptance_criteria", []),
+                dependencies=t.get("dependencies", []),
+                contract=Contract(
+                    success_criteria=t.get("contract", {}).get("success_criteria", []),
+                    scope_boundaries=t.get("contract", {}).get("scope_boundaries", ""),
+                ),
+            )
+            for i, t in enumerate(data.get("tasks", []))
+        ]
+        return Plan(
+            task_description=task_description,
+            spec=data.get("spec", ""),
+            tasks=tasks,
+            acceptance_criteria=data.get("acceptance_criteria", []),
+            raw_text=raw_text,
+        )
 
     def _parse_plan_structured(self, text: str, task_description: str) -> Plan:
         """Parse a Plan from a schema-validated JSON string returned by the SDK.

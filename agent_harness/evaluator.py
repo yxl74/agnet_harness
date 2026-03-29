@@ -108,7 +108,8 @@ class DefaultEvaluator:
         self.model = model
         self.cwd = cwd
         self.structured_output = structured_output
-        self._eval_count = 0
+        self._current_task_id: str | None = None
+        self._task_eval_count = 0
 
     # ------------------------------------------------------------------
     # Protocol implementation
@@ -130,13 +131,18 @@ class DefaultEvaluator:
         Returns:
             A :class:`StageExecution` wrapping the parsed :class:`EvaluationResult`.
         """
-        self._eval_count += 1
-        session_key = f"evaluator:{task.id}:iter-{self._eval_count}"
+        # Reset counter when switching to a new task
+        if task.id != self._current_task_id:
+            self._current_task_id = task.id
+            self._task_eval_count = 0
+        session_key = f"evaluator:{task.id}:iter-{self._task_eval_count}"
+        self._task_eval_count += 1
 
         prompt = self._build_prompt(task, result)
 
         total_usage = UsageInfo(input_tokens=0, output_tokens=0, spend_usd=0.0)
         result_text = ""
+        structured_data: dict | None = None
         session_id = ""
 
         if not self.structured_output:
@@ -147,9 +153,9 @@ class DefaultEvaluator:
 
         try:
             from claude_agent_sdk import (  # type: ignore[import]
-                AssistantMessage,
                 ClaudeAgentOptions,
                 ResultMessage,
+                SystemMessage,
                 query,
             )
 
@@ -169,30 +175,36 @@ class DefaultEvaluator:
             ):
                 if isinstance(message, ResultMessage):
                     result_text = message.result or ""
-                elif isinstance(message, AssistantMessage):
+                    # SDK populates structured_output with parsed JSON when output_format is set
+                    if self.structured_output and message.structured_output is not None:
+                        structured_data = message.structured_output
+                    # ResultMessage has session_id directly as a field
+                    session_id = message.session_id
+                    # Use SDK-provided aggregated usage instead of manual summation
                     if message.usage:
-                        total_usage.input_tokens += message.usage.get(
-                            "input_tokens", 0
-                        )
-                        total_usage.output_tokens += message.usage.get(
-                            "output_tokens", 0
-                        )
-                if (
-                    hasattr(message, "data")
-                    and message.data
-                    and "session_id" in message.data
-                ):
-                    session_id = message.data["session_id"]
+                        total_usage.input_tokens = message.usage.get("input_tokens", 0)
+                        total_usage.output_tokens = message.usage.get("output_tokens", 0)
+                    if message.total_cost_usd is not None:
+                        total_usage.spend_usd = message.total_cost_usd
+                elif isinstance(message, SystemMessage) and message.subtype == "init":
+                    if "session_id" in message.data:
+                        session_id = message.data["session_id"]
 
         except ImportError:
             result_text = ""
 
         if self.structured_output:
-            eval_result = self._parse_evaluation_structured(result_text, task.id)
+            if structured_data is not None:
+                eval_result = self._parse_evaluation_from_dict(structured_data, task.id, result_text)
+            else:
+                # Fallback: try parsing result_text as JSON
+                eval_result = self._parse_evaluation_structured(result_text, task.id)
         else:
             eval_result = self._parse_evaluation(result_text, task.id)
 
-        total_usage.spend_usd = _compute_cost(self.model, total_usage)
+        # Only compute cost if SDK didn't already provide it
+        if total_usage.spend_usd == 0.0:
+            total_usage.spend_usd = _compute_cost(self.model, total_usage)
 
         return StageExecution(
             result=eval_result,
@@ -312,28 +324,8 @@ class DefaultEvaluator:
             ]
         return "\n".join(lines)
 
-    def _parse_evaluation_structured(self, text: str, task_id: str) -> EvaluationResult:
-        """Parse an EvaluationResult from a schema-validated JSON string.
-
-        On JSON parse failure, returns a RETRY_TASK result with an explanatory
-        feedback message rather than silently defaulting.
-        """
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            return EvaluationResult(
-                task_id=task_id,
-                verdict=Verdict.RETRY_TASK,
-                scores={},
-                check_results=[],
-                feedback=(
-                    f"Evaluator returned invalid JSON (structured_output=True). "
-                    f"Raw text: {text[:200]!r}"
-                ),
-                replan_reason=None,
-                raw_text=text,
-            )
-
+    def _parse_evaluation_from_dict(self, data: dict, task_id: str, raw_text: str) -> EvaluationResult:
+        """Construct an EvaluationResult from a pre-parsed dict (from SDK structured_output field)."""
         check_results = [
             CheckResult(
                 name=c.get("name", ""),
@@ -344,7 +336,6 @@ class DefaultEvaluator:
             for c in data.get("checks", [])
         ]
 
-        # scores values may be int or float in JSON; coerce to float
         raw_scores = data.get("scores", {})
         scores: dict[str, float] = {}
         if isinstance(raw_scores, dict):
@@ -364,8 +355,24 @@ class DefaultEvaluator:
             check_results=check_results,
             feedback=data.get("feedback", ""),
             replan_reason=data.get("replan_reason"),
-            raw_text=text,
+            raw_text=raw_text,
         )
+
+    def _parse_evaluation_structured(self, text: str, task_id: str) -> EvaluationResult:
+        """Parse an EvaluationResult from a schema-validated JSON string.
+
+        Raises ValueError on JSON parse failure — this is a hard error in
+        production. The orchestrator should catch this and mark the run as FAILED.
+        """
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Evaluator returned invalid JSON (structured_output=True). "
+                f"Raw text: {text[:200]!r}"
+            ) from exc
+
+        return self._parse_evaluation_from_dict(data, task_id, text)
 
     def _parse_evaluation(self, text: str, task_id: str) -> EvaluationResult:
         """Extract an EvaluationResult from the agent's response text."""
