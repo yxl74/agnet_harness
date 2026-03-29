@@ -268,77 +268,118 @@
       letter-spacing: .08em;
     }
 
-    /* Stage Flow */
+    /* Stage Flow — Vertical */
     .pipeline-flow {
       display: flex;
-      align-items: center;
+      flex-direction: column;
       gap: 0;
-      padding: .5rem 0;
     }
     .stage-node {
-      flex: 1;
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      padding: 1rem;
+      padding: 1.1rem 1.25rem;
       position: relative;
       transition: border-color .2s, box-shadow .2s;
     }
     .stage-node.configured {
       border-color: var(--accent);
-      box-shadow: 0 0 15px rgba(77,148,255,.08);
+      box-shadow: 0 0 18px rgba(77,148,255,.06);
     }
-    .stage-node.configured .stage-status { color: var(--success); }
+    .stage-node.configured .stage-status-dot { background: var(--success); }
 
-    .stage-icon {
-      font-size: 1.3rem;
+    .stage-header {
+      display: flex;
+      align-items: center;
+      gap: .6rem;
       margin-bottom: .4rem;
+    }
+    .stage-status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-xdim);
+      flex-shrink: 0;
     }
     .stage-name {
       font-family: var(--mono);
-      font-size: .8rem;
+      font-size: .82rem;
       font-weight: 700;
       color: var(--text);
-      margin-bottom: .3rem;
+    }
+    .stage-step {
+      font-family: var(--mono);
+      font-size: .65rem;
+      color: var(--text-xdim);
+      margin-left: auto;
     }
     .stage-desc {
-      font-size: .75rem;
+      font-size: .78rem;
       color: var(--text-dim);
-      line-height: 1.4;
-    }
-    .stage-status {
-      font-family: var(--mono);
-      font-size: .68rem;
-      color: var(--text-xdim);
-      margin-top: .4rem;
+      line-height: 1.5;
+      margin-bottom: .5rem;
     }
     .stage-tools {
       display: flex;
       flex-wrap: wrap;
-      gap: .25rem;
-      margin-top: .4rem;
+      gap: .3rem;
+      margin-bottom: .5rem;
     }
     .tool-tag {
       font-family: var(--mono);
-      font-size: .65rem;
-      padding: 1px 6px;
+      font-size: .66rem;
+      padding: 2px 7px;
       border-radius: 3px;
       background: rgba(77,148,255,.1);
       color: var(--accent);
     }
 
-    .stage-arrow {
-      width: 32px;
+    /* Prompt Preview */
+    .stage-prompt-toggle {
+      font-family: var(--mono);
+      font-size: .7rem;
+      color: var(--accent);
+      cursor: pointer;
+      background: none;
+      border: none;
+      padding: .25rem 0;
+      display: flex;
+      align-items: center;
+      gap: .3rem;
+      transition: color .15s;
+    }
+    .stage-prompt-toggle:hover { color: var(--accent-2); }
+    .stage-prompt-toggle .arrow { transition: transform .2s; display: inline-block; font-size: .6rem; }
+    .stage-prompt-toggle .arrow.open { transform: rotate(90deg); }
+
+    .stage-prompt-preview {
+      display: none;
+      margin-top: .4rem;
+      padding: .6rem .75rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-size: .73rem;
+      color: var(--text-dim);
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 160px;
+      overflow-y: auto;
+    }
+    .stage-prompt-preview.open { display: block; }
+
+    /* Vertical Arrow */
+    .stage-arrow-v {
       display: flex;
       align-items: center;
       justify-content: center;
+      height: 28px;
       color: var(--text-xdim);
-      font-size: 1.2rem;
-      flex-shrink: 0;
     }
-    .stage-arrow svg {
-      width: 28px;
-      height: 16px;
+    .stage-arrow-v svg {
+      width: 16px;
+      height: 24px;
     }
 
     /* Dimensions Grid */
@@ -632,30 +673,6 @@
         </div>
 
         <div id="pipeline-content" style="display:none;">
-          <!-- Stage Flow -->
-          <div class="pipeline-flow" id="pipeline-flow">
-            <div class="stage-node" id="stage-planner">
-              <div class="stage-name">PLANNER</div>
-              <div class="stage-desc">Decomposes tasks, defines contracts</div>
-              <div class="stage-tools" id="planner-tools"></div>
-              <div class="stage-status" id="planner-status">not configured</div>
-            </div>
-            <div class="stage-arrow"><svg viewBox="0 0 28 16"><path d="M2 8h20M18 3l6 5-6 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-            <div class="stage-node" id="stage-generator">
-              <div class="stage-name">GENERATOR</div>
-              <div class="stage-desc">Implements tasks, self-evaluates</div>
-              <div class="stage-tools" id="generator-tools"></div>
-              <div class="stage-status" id="generator-status">not configured</div>
-            </div>
-            <div class="stage-arrow"><svg viewBox="0 0 28 16"><path d="M2 8h20M18 3l6 5-6 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-            <div class="stage-node" id="stage-evaluator">
-              <div class="stage-name">EVALUATOR</div>
-              <div class="stage-desc">Runs checks, enforces thresholds</div>
-              <div class="stage-tools" id="evaluator-tools"></div>
-              <div class="stage-status" id="evaluator-status">not configured</div>
-            </div>
-          </div>
-
           <!-- Config Summary -->
           <div class="config-summary" id="config-summary">
             <div class="config-kv"><span class="config-key">Model</span><span class="config-val" id="cfg-model">&mdash;</span></div>
@@ -663,14 +680,11 @@
             <div class="config-kv"><span class="config-key">Max Retries</span><span class="config-val" id="cfg-retries">&mdash;</span></div>
             <div class="config-kv"><span class="config-key">No-Progress</span><span class="config-val" id="cfg-noprog">&mdash;</span></div>
             <div class="config-kv"><span class="config-key">Target Repo</span><span class="config-val" id="cfg-repo">&mdash;</span></div>
-            <div class="config-kv"><span class="config-key">Structured Output</span><span class="config-val" id="cfg-structured">&mdash;</span></div>
+            <div class="config-kv"><span class="config-key">Output</span><span class="config-val" id="cfg-structured">&mdash;</span></div>
           </div>
 
-          <!-- Evaluation Dimensions -->
-          <div class="dimensions-section" id="dimensions-section" style="display:none;">
-            <div class="dimensions-title">Evaluation Dimensions</div>
-            <div class="dimensions-grid" id="dimensions-grid"></div>
-          </div>
+          <!-- Vertical Stage Flow -->
+          <div class="pipeline-flow" id="pipeline-flow"></div>
 
           <!-- Launch Bar -->
           <div class="launch-bar" id="launch-bar" style="display:none;">
@@ -879,53 +893,89 @@ function renderPipeline(config, prompts) {
   $('#pipeline-empty').style.display = 'none';
   $('#pipeline-content').style.display = '';
 
-  // Stage tools
-  renderTools('planner-tools', config.planner_tools);
-  renderTools('generator-tools', config.generator_tools);
-  renderTools('evaluator-tools', config.evaluator_tools);
-
-  // Stage status
-  const hasPrompt = (name) => prompts && prompts[name];
-  setStageConfigured('stage-planner', 'planner-status', hasPrompt('planner'));
-  setStageConfigured('stage-generator', 'generator-status', hasPrompt('generator'));
-  setStageConfigured('stage-evaluator', 'evaluator-status', hasPrompt('evaluator'));
-
   // Config summary
   $('#cfg-model').textContent = config.model || '';
   $('#cfg-budget').textContent = config.max_budget_usd != null ? `$${config.max_budget_usd}` : '';
   $('#cfg-retries').textContent = config.max_retries_per_task ?? '5';
   $('#cfg-noprog').textContent = config.no_progress_threshold ?? '3';
   $('#cfg-repo').textContent = config.target_repo || 'greenfield';
-  $('#cfg-structured').textContent = config.structured_output !== false ? 'yes' : 'no';
+  $('#cfg-structured').textContent = config.structured_output !== false ? 'structured' : 'legacy';
 
-  // Evaluation dimensions
-  const dims = config.evaluation_dimensions;
-  const dimSection = $('#dimensions-section');
-  const dimGrid = $('#dimensions-grid');
+  // Build vertical stage cards
+  const stages = [
+    {
+      key: 'planner', name: 'PLANNER', step: 'Step 1',
+      desc: 'Explores the codebase, decomposes the task into ordered sub-tasks with contracts defining "done".',
+      tools: config.planner_tools,
+    },
+    {
+      key: 'generator', name: 'GENERATOR', step: 'Step 2',
+      desc: 'Implements one task at a time. Self-evaluates (runs tests, checks contract) before handing off. Modifies working tree only.',
+      tools: config.generator_tools,
+    },
+    {
+      key: 'evaluator', name: 'EVALUATOR', step: 'Step 3',
+      desc: 'Runs concrete checks (pass/fail + metric thresholds), reviews code quality, emits verdict. Orchestrator enforces thresholds.',
+      tools: config.evaluator_tools,
+      dims: config.evaluation_dimensions,
+      mcp: config.evaluator_mcp_servers,
+    },
+  ];
 
-  if (dims && dims.length > 0) {
-    dimSection.style.display = '';
-    dimGrid.innerHTML = dims.map(d => {
-      const sev = d.severity || 'blocking';
-      const checks = (d.checks || []).map(c => {
-        const ctype = c.check_type === 'metric' ? 'metric' : 'passfail';
-        const label = c.check_type === 'metric' && c.threshold != null
-          ? `${c.name} >= ${c.threshold}`
-          : c.name;
-        return `<div class="check-item"><span class="check-type ${ctype}">${c.check_type || 'pass/fail'}</span> ${esc(label)}: ${esc(c.description || '')}</div>`;
-      }).join('');
+  const arrowSvg = '<svg viewBox="0 0 16 24"><path d="M8 2v16M3 14l5 6 5-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-      return `
-        <div class="dim-card ${sev}">
-          <div class="dim-name">${esc(d.name)} <span class="dim-severity ${sev}">${sev}</span></div>
-          <div class="dim-desc">${esc(d.description || '')}</div>
-          <div class="dim-checks">${checks || '<span style="color:var(--text-xdim);font-size:.72rem;">No checks defined</span>'}</div>
+  const flow = $('#pipeline-flow');
+  flow.innerHTML = stages.map((s, i) => {
+    const configured = prompts && prompts[s.key];
+    const promptText = prompts?.[s.key] || '';
+    const toolsHtml = (s.tools || []).map(t => `<span class="tool-tag">${esc(t)}</span>`).join('');
+
+    // MCP servers for evaluator
+    let mcpHtml = '';
+    if (s.mcp && Object.keys(s.mcp).length > 0) {
+      mcpHtml = '<div style="margin-top:.4rem;">' +
+        Object.keys(s.mcp).map(k => `<span class="tool-tag" style="background:rgba(245,158,66,.12);color:var(--warn);">MCP: ${esc(k)}</span>`).join(' ') +
+        '</div>';
+    }
+
+    // Evaluation dimensions inline for evaluator
+    let dimsHtml = '';
+    if (s.dims && s.dims.length > 0) {
+      dimsHtml = '<div class="dimensions-grid" style="margin-top:.65rem;">' +
+        s.dims.map(d => {
+          const sev = d.severity || 'blocking';
+          const checks = (d.checks || []).map(c => {
+            const ctype = c.check_type === 'metric' ? 'metric' : 'passfail';
+            const label = c.check_type === 'metric' && c.threshold != null ? `${c.name} >= ${c.threshold}` : c.name;
+            return `<div class="check-item"><span class="check-type ${ctype}">${c.check_type || 'pass/fail'}</span> ${esc(label)}: ${esc(c.description || '')}</div>`;
+          }).join('');
+          return `<div class="dim-card ${sev}"><div class="dim-name">${esc(d.name)} <span class="dim-severity ${sev}">${sev}</span></div><div class="dim-desc">${esc(d.description || '')}</div><div class="dim-checks">${checks || ''}</div></div>`;
+        }).join('') + '</div>';
+    }
+
+    const arrow = i < stages.length - 1 ? `<div class="stage-arrow-v">${arrowSvg}</div>` : '';
+
+    return `
+      <div class="stage-node ${configured ? 'configured' : ''}" id="stage-${s.key}">
+        <div class="stage-header">
+          <span class="stage-status-dot"></span>
+          <span class="stage-name">${s.name}</span>
+          <span class="stage-step">${s.step}</span>
         </div>
-      `;
-    }).join('');
-  } else {
-    dimSection.style.display = 'none';
-  }
+        <div class="stage-desc">${s.desc}</div>
+        <div class="stage-tools">${toolsHtml}</div>
+        ${mcpHtml}
+        ${promptText ? `
+          <button class="stage-prompt-toggle" onclick="togglePrompt(this)">
+            <span class="arrow">&#9654;</span> View system prompt
+          </button>
+          <div class="stage-prompt-preview">${esc(promptText)}</div>
+        ` : '<div style="font-family:var(--mono);font-size:.68rem;color:var(--text-xdim);margin-top:.3rem;">No prompt configured</div>'}
+        ${dimsHtml}
+      </div>
+      ${arrow}
+    `;
+  }).join('');
 
   // Launch bar
   const launchBar = $('#launch-bar');
@@ -937,22 +987,12 @@ function renderPipeline(config, prompts) {
     : 'Waiting for configuration to complete...';
 }
 
-function renderTools(id, tools) {
-  const el = $(`#${id}`);
-  if (!tools || !tools.length) { el.innerHTML = ''; return; }
-  el.innerHTML = tools.map(t => `<span class="tool-tag">${esc(t)}</span>`).join('');
-}
-
-function setStageConfigured(nodeId, statusId, configured) {
-  const node = $(`#${nodeId}`);
-  const status = $(`#${statusId}`);
-  if (configured) {
-    node.classList.add('configured');
-    status.textContent = 'configured';
-  } else {
-    node.classList.remove('configured');
-    status.textContent = 'not configured';
-  }
+function togglePrompt(btn) {
+  const arrow = btn.querySelector('.arrow');
+  const preview = btn.nextElementSibling;
+  const isOpen = preview.classList.toggle('open');
+  arrow.classList.toggle('open', isOpen);
+  btn.innerHTML = `<span class="arrow ${isOpen ? 'open' : ''}">&#9654;</span> ${isOpen ? 'Hide' : 'View'} system prompt`;
 }
 
 $('#refresh-pipeline-btn').addEventListener('click', async () => {
