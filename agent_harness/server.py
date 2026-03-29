@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request as FastAPIRequest, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -134,6 +134,40 @@ async def get_project_config(name: str) -> JSONResponse:
             prompts[md_file.stem] = md_file.read_text(encoding="utf-8")
 
     return JSONResponse(content={"config": config, "prompts": prompts})
+
+
+@app.patch("/api/projects/{name}/config")
+async def update_project_config(name: str, request: FastAPIRequest) -> JSONResponse:
+    """Update specific fields in a project's config.json."""
+    projects_dir = _projects_dir()
+    config_path = projects_dir / name / "config.json"
+
+    if not config_path.exists():
+        raise HTTPException(status_code=404, detail=f"Project '{name}' config not found.")
+
+    body = await request.json()
+
+    # Load existing config
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+
+    # Whitelist of updatable fields
+    updatable = {
+        "effort", "planner_effort", "generator_effort", "evaluator_effort",
+        "model", "max_budget_usd", "max_retries_per_task", "no_progress_threshold",
+        "structured_output", "target_repo",
+    }
+
+    updated = []
+    for key, value in body.items():
+        if key in updatable:
+            config[key] = value
+            updated.append(key)
+
+    if not updated:
+        raise HTTPException(status_code=400, detail=f"No updatable fields provided. Allowed: {sorted(updatable)}")
+
+    config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    return JSONResponse(content={"updated": updated, "config": config})
 
 
 # ---------------------------------------------------------------------------

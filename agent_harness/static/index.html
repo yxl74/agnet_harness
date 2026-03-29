@@ -369,6 +369,45 @@
     }
     .stage-prompt-preview.open { display: block; }
 
+    /* Effort Selector */
+    .effort-selector {
+      display: flex;
+      align-items: center;
+      gap: .35rem;
+      margin-bottom: .5rem;
+    }
+    .effort-label {
+      font-family: var(--mono);
+      font-size: .68rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      margin-right: .2rem;
+    }
+    .effort-btn {
+      font-family: var(--mono);
+      font-size: .65rem;
+      padding: 2px 8px;
+      border-radius: 3px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-dim);
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .effort-btn:hover { border-color: var(--accent); color: var(--text); }
+    .effort-btn.active {
+      background: rgba(77,148,255,.15);
+      border-color: var(--accent);
+      color: var(--accent);
+      font-weight: 700;
+    }
+    .effort-btn.active.max-effort {
+      background: rgba(245,158,66,.15);
+      border-color: var(--accent-3);
+      color: var(--accent-3);
+    }
+
     /* Stage metadata row */
     .stage-meta-row {
       display: flex;
@@ -917,7 +956,10 @@ function renderPipeline(config, prompts) {
 
   // Config summary
   $('#cfg-model').textContent = config.model || '';
-  $('#cfg-effort').textContent = config.effort || 'high';
+  const pe = config.planner_effort || config.effort || 'high';
+  const ge = config.generator_effort || config.effort || 'high';
+  const ee = config.evaluator_effort || config.effort || 'high';
+  $('#cfg-effort').textContent = (pe === ge && ge === ee) ? pe : `P:${pe} G:${ge} E:${ee}`;
   $('#cfg-thinking').textContent = 'adaptive';
   $('#cfg-budget').textContent = config.max_budget_usd != null ? `$${config.max_budget_usd}` : '';
   $('#cfg-retries').textContent = config.max_retries_per_task ?? '5';
@@ -929,21 +971,24 @@ function renderPipeline(config, prompts) {
   $('#cfg-structured').textContent = config.structured_output !== false ? 'structured' : 'legacy';
 
   // Build vertical stage cards
-  const effort = config.effort || 'high';
+  const globalEffort = config.effort || 'high';
   const model = config.model || 'claude-opus-4-6';
+  const getEffort = (stage) => config[`${stage}_effort`] || globalEffort;
 
   const stages = [
     {
       key: 'planner', name: 'PLANNER', step: 'Step 1',
       desc: 'Explores the codebase, decomposes the task into ordered sub-tasks with contracts defining "done".',
       tools: config.planner_tools,
-      meta: [`model: ${model}`, `effort: ${effort}`, 'thinking: adaptive', 'mode: bypassPermissions'],
+      effort: getEffort('planner'),
+      meta: [`model: ${model}`, 'thinking: adaptive', 'mode: bypassPermissions'],
     },
     {
       key: 'generator', name: 'GENERATOR', step: 'Step 2',
       desc: 'Implements one task at a time. Self-evaluates (runs tests, checks contract) before handing off. Modifies working tree only.',
       tools: config.generator_tools,
-      meta: [`model: ${model}`, `effort: ${effort}`, 'thinking: adaptive', 'mode: acceptEdits', 'session: long-lived per task'],
+      effort: getEffort('generator'),
+      meta: [`model: ${model}`, 'thinking: adaptive', 'mode: acceptEdits', 'session: long-lived'],
     },
     {
       key: 'evaluator', name: 'EVALUATOR', step: 'Step 3',
@@ -951,7 +996,8 @@ function renderPipeline(config, prompts) {
       tools: config.evaluator_tools,
       dims: config.evaluation_dimensions,
       mcp: config.evaluator_mcp_servers,
-      meta: [`model: ${model}`, `effort: ${effort}`, 'thinking: adaptive', 'mode: bypassPermissions', 'session: fresh per eval'],
+      effort: getEffort('evaluator'),
+      meta: [`model: ${model}`, 'thinking: adaptive', 'mode: bypassPermissions', 'session: fresh'],
     },
   ];
 
@@ -996,6 +1042,13 @@ function renderPipeline(config, prompts) {
           <span class="stage-step">${s.step}</span>
         </div>
         <div class="stage-desc">${s.desc}</div>
+        <div class="effort-selector">
+          <span class="effort-label">Effort:</span>
+          ${['low','medium','high','max'].map(lv =>
+            `<button class="effort-btn ${lv === s.effort ? 'active' : ''} ${lv === 'max' && lv === s.effort ? 'max-effort' : ''}"
+                    onclick="setEffort('${s.key}','${lv}')">${lv}</button>`
+          ).join('')}
+        </div>
         <div class="stage-meta-row">${(s.meta || []).map(m => `<span class="stage-meta-tag">${esc(m)}</span>`).join('')}</div>
         <div class="stage-tools">${toolsHtml}</div>
         ${mcpHtml}
@@ -1019,6 +1072,20 @@ function renderPipeline(config, prompts) {
   $('#launch-status').textContent = ready
     ? `Pipeline configured for "${config.name || 'project'}". Ready to launch.`
     : 'Waiting for configuration to complete...';
+}
+
+async function setEffort(stage, level) {
+  if (!configuredProject) return;
+  try {
+    const res = await fetch(`/api/projects/${enc(configuredProject)}/config`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ [`${stage}_effort`]: level }),
+    });
+    if (!res.ok) { toast('Failed to update effort'); return; }
+    toast(`${stage} effort → ${level}`);
+    await loadPipelineForProject(configuredProject);
+  } catch { toast('Error updating config'); }
 }
 
 function togglePrompt(btn) {

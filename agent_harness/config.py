@@ -57,8 +57,16 @@ class HarnessConfig:
     no_progress_threshold: int = 3        # Pause if same failure repeats this many times
     score_thresholds: dict[str, float] | None = None  # Hard gates: {"correctness": 0.8, "quality": 0.7}
     evaluator_mcp_servers: dict | None = None  # Project-specific MCP servers for evaluation
-    effort: str = "high"                       # Reasoning effort: "low", "medium", "high", "max"
+    effort: str = "high"                       # Global default reasoning effort
+    planner_effort: str | None = None          # Per-stage override (falls back to effort)
+    generator_effort: str | None = None
+    evaluator_effort: str | None = None
     evaluation_dimensions: list[dict] | None = None  # Declared dimensions with thresholds and descriptions
+
+    def get_effort(self, stage: str) -> str:
+        """Return effective effort for a stage, falling back to global default."""
+        override = getattr(self, f"{stage}_effort", None)
+        return override or self.effort
 
     # ------------------------------------------------------------------
     # Loading
@@ -113,6 +121,9 @@ class HarnessConfig:
             score_thresholds=raw.get("score_thresholds"),
             evaluator_mcp_servers=raw.get("evaluator_mcp_servers"),
             effort=raw.get("effort", "high"),
+            planner_effort=raw.get("planner_effort"),
+            generator_effort=raw.get("generator_effort"),
+            evaluator_effort=raw.get("evaluator_effort"),
             evaluation_dimensions=raw.get("evaluation_dimensions"),
         )
 
