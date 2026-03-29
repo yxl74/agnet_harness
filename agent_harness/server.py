@@ -617,7 +617,11 @@ async def _sdk_configure(
                             })
 
                 elif isinstance(message, ResultMessage):
-                    if message.result:
+                    # ResultMessage.result is the aggregated final text — but
+                    # it was already streamed via AssistantMessage TextBlocks.
+                    # Only use it if nothing was captured from AssistantMessage
+                    # (e.g., SDK returned result without streaming).
+                    if message.result and not turn_output:
                         turn_output.append(message.result)
                         await websocket.send_json({"type": "message", "text": message.result})
 
