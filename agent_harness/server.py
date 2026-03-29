@@ -260,16 +260,39 @@ async def _run_orchestrator(
         from agent_harness.config import HarnessConfig
         from agent_harness.core import Orchestrator
 
+        config = HarnessConfig.from_project(project_dir)
+        cwd = str(Path(config.target_repo).resolve()) if config.target_repo else str(project_dir)
+
         try:
-            from agent_harness.agents import (  # type: ignore[import]
-                DefaultEvaluator,
-                DefaultGenerator,
-                DefaultPlanner,
+            from agent_harness.planner import DefaultPlanner
+            from agent_harness.generator import DefaultGenerator
+            from agent_harness.evaluator import DefaultEvaluator
+
+            planner = DefaultPlanner(
+                system_prompt=config.planner_prompt,
+                tools=config.planner_tools,
+                model=config.model,
+                cwd=cwd,
+                structured_output=config.structured_output,
+                effort=config.get_effort("planner"),
             )
-            config = HarnessConfig.from_project(project_dir)
-            planner = DefaultPlanner(config)
-            generator = DefaultGenerator(config)
-            evaluator = DefaultEvaluator(config)
+            generator = DefaultGenerator(
+                system_prompt=config.generator_prompt,
+                tools=config.generator_tools,
+                model=config.model,
+                cwd=cwd,
+                effort=config.get_effort("generator"),
+            )
+            evaluator = DefaultEvaluator(
+                system_prompt=config.evaluator_prompt,
+                tools=config.evaluator_tools,
+                model=config.model,
+                cwd=cwd,
+                structured_output=config.structured_output,
+                evaluation_dimensions=config.evaluation_dimensions,
+                mcp_servers=config.evaluator_mcp_servers,
+                effort=config.get_effort("evaluator"),
+            )
         except ImportError:
             planner = None  # type: ignore[assignment]
             generator = None  # type: ignore[assignment]
