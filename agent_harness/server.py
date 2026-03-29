@@ -154,7 +154,7 @@ async def update_project_config(name: str, request: FastAPIRequest) -> JSONRespo
     updatable = {
         "effort", "planner_effort", "generator_effort", "evaluator_effort",
         "model", "max_budget_usd", "max_retries_per_task", "no_progress_threshold",
-        "structured_output", "target_repo",
+        "structured_output", "target_repo", "task_description",
     }
 
     updated = []
@@ -509,6 +509,10 @@ endpoint testing. If you see test files, reference them by name.
 - What's the tech stack? (If you explored the codebase, confirm what you found.)
 - Suggest a project name (lowercase, hyphenated).
 - After agreement: write config.json with name, model, budget, target_repo.
+- IMPORTANT: include a "task_description" field in config.json with a clear,
+  complete description of what the user wants to build. This becomes the
+  planner's input when the user launches a run — they should NOT have to
+  re-type their goal.
 
 ### 2. Evaluation Dimensions
 This is the most important section. The harness uses evidence-based evaluation,

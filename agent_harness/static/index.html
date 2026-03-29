@@ -1089,11 +1089,20 @@ function renderPipeline(config, prompts) {
   // Launch bar
   const launchBar = $('#launch-bar');
   launchBar.style.display = '';
+  const hasTask = !!config.task_description;
   const ready = config.model && (prompts?.planner || prompts?.generator || prompts?.evaluator);
   $('#launch-btn').disabled = !ready;
-  $('#launch-status').textContent = ready
-    ? `Pipeline configured for "${config.name || 'project'}". Ready to launch.`
-    : 'Waiting for configuration to complete...';
+  if (ready && hasTask) {
+    const taskPreview = config.task_description.length > 120
+      ? config.task_description.slice(0, 120) + '...'
+      : config.task_description;
+    $('#launch-status').innerHTML =
+      `<strong>Task:</strong> ${esc(taskPreview)}`;
+  } else if (ready) {
+    $('#launch-status').textContent = 'Pipeline configured. No task description — you\'ll be asked on launch.';
+  } else {
+    $('#launch-status').textContent = 'Waiting for configuration to complete...';
+  }
 }
 
 async function setEffort(stage, level) {
@@ -1139,9 +1148,45 @@ $('#refresh-pipeline-btn').addEventListener('click', async () => {
   } catch { /* ignore */ }
 });
 
-$('#launch-btn').addEventListener('click', () => {
+$('#launch-btn').addEventListener('click', async () => {
   if (!configuredProject) return;
-  openNewRunFor(configuredProject);
+  const btn = $('#launch-btn');
+  btn.disabled = true;
+  btn.textContent = 'Starting...';
+
+  try {
+    // Get task_description from config — no need to ask the user again
+    const cfgRes = await fetch(`/api/projects/${enc(configuredProject)}/config`);
+    const cfgData = await cfgRes.json();
+    const task = cfgData.config.task_description;
+
+    if (!task) {
+      // No task_description in config — fall back to runs page with form
+      toast('No task description in config. Please enter one.');
+      openNewRunFor(configuredProject);
+      btn.disabled = false;
+      btn.textContent = 'Start Run';
+      return;
+    }
+
+    // Start the run directly
+    const res = await fetch(`/api/projects/${enc(configuredProject)}/run`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ task }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail);
+
+    toast(`Run ${data.run_id} started!`);
+    // Navigate to monitor
+    openMonitor(configuredProject, data.run_id);
+  } catch (err) {
+    toast(`Error: ${err.message}`, 5000);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Start Run';
+  }
 });
 
 // ── Configurator Chat ───────────────────────────

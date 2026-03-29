@@ -62,6 +62,7 @@ class HarnessConfig:
     generator_effort: str | None = None
     evaluator_effort: str | None = None
     evaluation_dimensions: list[dict] | None = None  # Declared dimensions with thresholds and descriptions
+    task_description: str | None = None               # Default task from configurator conversation
 
     def get_effort(self, stage: str) -> str:
         """Return effective effort for a stage, falling back to global default."""
@@ -124,6 +125,7 @@ class HarnessConfig:
             planner_effort=raw.get("planner_effort"),
             generator_effort=raw.get("generator_effort"),
             evaluator_effort=raw.get("evaluator_effort"),
+            task_description=raw.get("task_description"),
             evaluation_dimensions=raw.get("evaluation_dimensions"),
         )
 
