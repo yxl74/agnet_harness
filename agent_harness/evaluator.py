@@ -249,18 +249,26 @@ class DefaultEvaluator:
             for f in result.files_changed:
                 lines.append(f"- `{f}`")
 
-        # Inject declared evaluation dimensions if configured
+        # Inject declared evaluation dimensions with concrete checks
         if self.evaluation_dimensions:
-            lines += ["", "### Required Evaluation Dimensions", ""]
-            lines.append("You MUST score on each of these dimensions (0.0–1.0):")
+            lines += ["", "### Required Evaluation Checks", ""]
+            lines.append(
+                "You MUST run each check below and report results. "
+                "For pass_fail checks, report as a CHECK with passed: true/false. "
+                "For metric checks, compute the actual value and report it as a SCORE."
+            )
             lines.append("")
             for dim in self.evaluation_dimensions:
-                threshold = dim.get("threshold", 0.0)
                 severity = dim.get("severity", "blocking")
-                lines.append(
-                    f"- **{dim['name']}** [{severity}, threshold: {threshold}]: {dim.get('description', '')}"
-                )
-            lines.append("")
+                lines.append(f"**{dim['name']}** [{severity}]: {dim.get('description', '')}")
+                for check in dim.get("checks", []):
+                    ctype = check.get("check_type", "pass_fail")
+                    desc = check.get("description", "")
+                    if ctype == "metric" and check.get("threshold") is not None:
+                        lines.append(f"  - `{check['name']}` [metric, threshold: {check['threshold']}]: {desc}")
+                    else:
+                        lines.append(f"  - `{check['name']}` [pass/fail]: {desc}")
+                lines.append("")
 
         if self.structured_output:
             lines += [

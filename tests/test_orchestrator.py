@@ -1214,3 +1214,182 @@ async def test_threshold_does_not_override_halt(tmp_path, simple_plan):
     state = await orchestrator.run("test task")
 
     assert state.status == RunStatus.HALTED
+
+
+# ---------------------------------------------------------------------------
+# Evaluation dimension enforcement tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_declared_dimension_pass_fail_check_blocks_advance(tmp_path, simple_plan):
+    """A declared pass_fail check that fails should override ADVANCE to RETRY."""
+    config = HarnessConfig(
+        name="test", model="claude-opus-4-6", max_budget_usd=10.0,
+        generator_tools=[], evaluator_tools=[], planner_tools=[],
+        target_repo=None, session_mode="fresh",
+        planner_prompt="", generator_prompt="", evaluator_prompt="",
+        evaluation_dimensions=[{
+            "name": "data_quality",
+            "description": "Data checks",
+            "severity": "blocking",
+            "checks": [
+                {"name": "no_leakage", "check_type": "pass_fail", "description": "No data leakage"},
+            ],
+        }],
+    )
+
+    mock_planner = AsyncMock()
+    mock_planner.plan.return_value = _planner_exec(simple_plan)
+    mock_generator = AsyncMock()
+    mock_generator.generate.return_value = _generator_exec()
+
+    # Evaluator says ADVANCE but the pass_fail check is not in check_results (missing = failed)
+    no_check_advance = StageExecution(
+        result=EvaluationResult(
+            task_id="t1", verdict=Verdict.ADVANCE_TASK,
+            scores={}, check_results=[],
+            feedback="looks good", replan_reason=None, raw_text="",
+        ),
+        usage=UsageInfo(100, 50, 0.01),
+        session_key="evaluator:t1:iter-0", session_id="s1",
+    )
+    # Second eval: check reported and passes
+    with_check_advance = StageExecution(
+        result=EvaluationResult(
+            task_id="t1", verdict=Verdict.ADVANCE_TASK,
+            scores={},
+            check_results=[CheckResult(name="no_leakage", passed=True, output="clean", severity="blocking")],
+            feedback="all good", replan_reason=None, raw_text="",
+        ),
+        usage=UsageInfo(100, 50, 0.01),
+        session_key="evaluator:t1:iter-1", session_id="s2",
+    )
+
+    mock_evaluator = AsyncMock()
+    mock_evaluator.evaluate.side_effect = [no_check_advance, with_check_advance]
+
+    orchestrator = _make_orchestrator(tmp_path, config, mock_planner, mock_generator, mock_evaluator)
+    state = await orchestrator.run("test task")
+
+    assert state.status == RunStatus.COMPLETED
+    assert mock_generator.generate.call_count == 2  # First attempt was overridden to retry
+
+
+@pytest.mark.asyncio
+async def test_declared_dimension_metric_check_blocks_advance(tmp_path, simple_plan):
+    """A declared metric check below threshold should override ADVANCE to RETRY."""
+    config = HarnessConfig(
+        name="test", model="claude-opus-4-6", max_budget_usd=10.0,
+        generator_tools=[], evaluator_tools=[], planner_tools=[],
+        target_repo=None, session_mode="fresh",
+        planner_prompt="", generator_prompt="", evaluator_prompt="",
+        evaluation_dimensions=[{
+            "name": "model_perf",
+            "description": "Model performance",
+            "severity": "blocking",
+            "checks": [
+                {"name": "pr_auc", "check_type": "metric", "threshold": 0.8, "description": "PR-AUC >= 0.8"},
+            ],
+        }],
+    )
+
+    mock_planner = AsyncMock()
+    mock_planner.plan.return_value = _planner_exec(simple_plan)
+    mock_generator = AsyncMock()
+    mock_generator.generate.return_value = _generator_exec()
+
+    # Evaluator says ADVANCE but pr_auc is only 0.65 (below 0.8)
+    low_metric = StageExecution(
+        result=EvaluationResult(
+            task_id="t1", verdict=Verdict.ADVANCE_TASK,
+            scores={"pr_auc": 0.65}, check_results=[],
+            feedback="model trained", replan_reason=None, raw_text="",
+        ),
+        usage=UsageInfo(100, 50, 0.01),
+        session_key="evaluator:t1:iter-0", session_id="s1",
+    )
+    # Second eval: metric now above threshold
+    good_metric = StageExecution(
+        result=EvaluationResult(
+            task_id="t1", verdict=Verdict.ADVANCE_TASK,
+            scores={"pr_auc": 0.9}, check_results=[],
+            feedback="improved", replan_reason=None, raw_text="",
+        ),
+        usage=UsageInfo(100, 50, 0.01),
+        session_key="evaluator:t1:iter-1", session_id="s2",
+    )
+
+    mock_evaluator = AsyncMock()
+    mock_evaluator.evaluate.side_effect = [low_metric, good_metric]
+
+    orchestrator = _make_orchestrator(tmp_path, config, mock_planner, mock_generator, mock_evaluator)
+    state = await orchestrator.run("test task")
+
+    assert state.status == RunStatus.COMPLETED
+    assert mock_generator.generate.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_warning_dimension_does_not_block(tmp_path, simple_plan):
+    """A warning-severity dimension should not override ADVANCE even if check fails."""
+    config = HarnessConfig(
+        name="test", model="claude-opus-4-6", max_budget_usd=10.0,
+        generator_tools=[], evaluator_tools=[], planner_tools=[],
+        target_repo=None, session_mode="fresh",
+        planner_prompt="", generator_prompt="", evaluator_prompt="",
+        evaluation_dimensions=[{
+            "name": "operational",
+            "description": "Ops checks",
+            "severity": "warning",
+            "checks": [
+                {"name": "artifacts_versioned", "check_type": "pass_fail", "description": "Artifacts versioned"},
+            ],
+        }],
+    )
+
+    mock_planner = AsyncMock()
+    mock_planner.plan.return_value = _planner_exec(simple_plan)
+    mock_generator = AsyncMock()
+    mock_generator.generate.return_value = _generator_exec()
+
+    # Warning check missing — should NOT block
+    mock_evaluator = AsyncMock()
+    mock_evaluator.evaluate.return_value = StageExecution(
+        result=EvaluationResult(
+            task_id="t1", verdict=Verdict.ADVANCE_TASK,
+            scores={}, check_results=[],
+            feedback="done", replan_reason=None, raw_text="",
+        ),
+        usage=UsageInfo(100, 50, 0.01),
+        session_key="evaluator:t1:iter-0", session_id="s1",
+    )
+
+    orchestrator = _make_orchestrator(tmp_path, config, mock_planner, mock_generator, mock_evaluator)
+    state = await orchestrator.run("test task")
+
+    assert state.status == RunStatus.COMPLETED
+    assert mock_generator.generate.call_count == 1  # No retry — warning doesn't block
+
+
+@pytest.mark.asyncio
+async def test_evaluation_progress_persisted(tmp_path, mock_config, simple_plan):
+    """evaluation_progress.json should be written after each evaluation."""
+    mock_planner = AsyncMock()
+    mock_planner.plan.return_value = _planner_exec(simple_plan)
+    mock_generator = AsyncMock()
+    mock_generator.generate.return_value = _generator_exec()
+    mock_evaluator = AsyncMock()
+    mock_evaluator.evaluate.return_value = _evaluator_exec()
+
+    orchestrator = _make_orchestrator(tmp_path, mock_config, mock_planner, mock_generator, mock_evaluator)
+    await orchestrator.run("test task")
+
+    progress_path = orchestrator.run_dir / "evaluation_progress.json"
+    assert progress_path.exists()
+
+    import json as _json
+    data = _json.loads(progress_path.read_text())
+    assert len(data["entries"]) >= 1
+    assert data["entries"][0]["task_id"] == "t1"
+    assert data["entries"][0]["verdict"] == "advance_task"

@@ -345,7 +345,16 @@ async def configure_project(websocket: WebSocket) -> None:
 
     try:
         project_name = await _sdk_configure(websocket, description, sdk)
-        await websocket.send_json({"type": "done", "project_name": project_name})
+        # Verify the project was actually created before declaring success
+        project_dir = _projects_dir() / project_name
+        config_path = project_dir / "config.json"
+        if not config_path.exists():
+            await websocket.send_json({
+                "type": "error",
+                "text": f"Configurator finished but config.json was not created at {config_path}",
+            })
+        else:
+            await websocket.send_json({"type": "done", "project_name": project_name})
     except WebSocketDisconnect:
         return
     except Exception as exc:  # noqa: BLE001
