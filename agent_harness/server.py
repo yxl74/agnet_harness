@@ -398,12 +398,19 @@ async def configure_project(websocket: WebSocket) -> None:
         project_dir = _projects_dir() / project_name
         config_path = project_dir / "config.json"
         if not config_path.exists():
+            # Fallback: scaffold the project so the user's conversation isn't wasted
+            from agent_harness.config import HarnessConfig
             await websocket.send_json({
-                "type": "error",
-                "text": f"Configurator finished but config.json was not created at {config_path}",
+                "type": "message",
+                "text": f"Config wasn't written to {config_path}. Creating default scaffold for '{project_name}'...",
             })
-        else:
-            await websocket.send_json({"type": "done", "project_name": project_name})
+            HarnessConfig.scaffold_project(project_dir, name=project_name)
+            if target_repo:
+                # Patch target_repo into the scaffolded config
+                cfg = json.loads(config_path.read_text(encoding="utf-8"))
+                cfg["target_repo"] = target_repo
+                config_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        await websocket.send_json({"type": "done", "project_name": project_name})
     except WebSocketDisconnect:
         return
     except Exception as exc:  # noqa: BLE001
@@ -518,12 +525,15 @@ Show the user the complete config.json and ask for final adjustments.
 - Ask ONE question at a time. Don't overwhelm with multiple questions.
 - When filling in config, show the user what you're writing and get approval.
 - Push back on vague criteria. Your job is to make evaluation concrete.
-- Use the Write tool to create files in the project directory.
+- Use the Write tool to create files. IMPORTANT: always use ABSOLUTE paths
+  starting with {projects_dir}/<project-name>/. Never use relative paths.
+  Example: {projects_dir}/my-project/config.json
 
 ## Output
 When completely done, output: PROJECT_NAME: <name>
 
 The projects directory is at: {projects_dir}
+All project files MUST be written under: {projects_dir}/<project-name>/
 """
 
 
@@ -574,8 +584,9 @@ async def _sdk_configure(
 
     # Build the initial message with target_repo context if provided
     user_message = f"I want to create an agent harness project for: {description}"
+    user_message += f"\n\nWrite all project files to: {projects_dir.resolve()}/<project-name>/"
     if target_repo:
-        user_message += f"\n\nThe existing codebase is at: {target_repo}"
+        user_message += f"\n\nThe existing codebase to explore is at: {target_repo}"
         user_message += "\nPlease explore the codebase first (Step 0) before asking questions."
 
     all_output: list[str] = []
