@@ -93,6 +93,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 model=config.model,
                 cwd=cwd,
                 structured_output=config.structured_output,
+                evaluation_dimensions=config.evaluation_dimensions,
+                mcp_servers=config.evaluator_mcp_servers,
             )
         else:
             planner = None  # type: ignore[assignment]
@@ -177,6 +179,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
                 model=config.model,
                 cwd=cwd,
                 structured_output=config.structured_output,
+                evaluation_dimensions=config.evaluation_dimensions,
+                mcp_servers=config.evaluator_mcp_servers,
             )
         except ImportError:
             planner = None  # type: ignore[assignment]

@@ -1142,3 +1142,75 @@ async def test_evaluator_exception_results_in_failed_state(tmp_path, mock_config
 
     assert state.status == RunStatus.FAILED
     assert "ValueError" in state.status_reason
+
+
+# ---------------------------------------------------------------------------
+# Threshold enforcement tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_threshold_overrides_advance_to_retry(tmp_path, simple_plan):
+    """Evaluator says ADVANCE but score below threshold → harness forces RETRY."""
+    config = HarnessConfig(
+        name="test", model="claude-opus-4-6", max_budget_usd=10.0,
+        generator_tools=[], evaluator_tools=[], planner_tools=[],
+        target_repo=None, session_mode="fresh",
+        planner_prompt="", generator_prompt="", evaluator_prompt="",
+        score_thresholds={"correctness": 0.9},  # gate at 0.9
+    )
+
+    mock_planner = AsyncMock()
+    mock_planner.plan.return_value = _planner_exec(simple_plan)
+
+    mock_generator = AsyncMock()
+    mock_generator.generate.return_value = _generator_exec()
+
+    # Evaluator says ADVANCE but correctness is only 0.7 (below 0.9 threshold)
+    low_score_advance = StageExecution(
+        result=EvaluationResult(
+            task_id="t1", verdict=Verdict.ADVANCE_TASK,
+            scores={"correctness": 0.7, "quality": 1.0},
+            check_results=[], feedback="looks good", replan_reason=None, raw_text="",
+        ),
+        usage=UsageInfo(100, 50, 0.01),
+        session_key="evaluator:t1:iter-0", session_id="s1",
+    )
+    # Second eval: score now above threshold → actually advances
+    passing_advance = _evaluator_exec()
+
+    mock_evaluator = AsyncMock()
+    mock_evaluator.evaluate.side_effect = [low_score_advance, passing_advance]
+
+    orchestrator = _make_orchestrator(tmp_path, config, mock_planner, mock_generator, mock_evaluator)
+    state = await orchestrator.run("test task")
+
+    assert state.status == RunStatus.COMPLETED
+    # Generator should have been called twice (first attempt overridden to retry)
+    assert mock_generator.generate.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_threshold_does_not_override_halt(tmp_path, simple_plan):
+    """Threshold enforcement only overrides ADVANCE, never HALT."""
+    config = HarnessConfig(
+        name="test", model="claude-opus-4-6", max_budget_usd=10.0,
+        generator_tools=[], evaluator_tools=[], planner_tools=[],
+        target_repo=None, session_mode="fresh",
+        planner_prompt="", generator_prompt="", evaluator_prompt="",
+        score_thresholds={"correctness": 0.9},
+    )
+
+    mock_planner = AsyncMock()
+    mock_planner.plan.return_value = _planner_exec(simple_plan)
+
+    mock_generator = AsyncMock()
+    mock_generator.generate.return_value = _generator_exec()
+
+    mock_evaluator = AsyncMock()
+    mock_evaluator.evaluate.return_value = _evaluator_exec(verdict=Verdict.HALT_RUN)
+
+    orchestrator = _make_orchestrator(tmp_path, config, mock_planner, mock_generator, mock_evaluator)
+    state = await orchestrator.run("test task")
+
+    assert state.status == RunStatus.HALTED

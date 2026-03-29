@@ -652,6 +652,7 @@ $('#back-to-runs-btn').addEventListener('click', () => {
 // --------------------------------------------------------------------------
 
 let ws = null;
+let wsReady = false;  // true once initial configure message sent
 
 function chatAppend(text, type = 'agent') {
   const box = $('#chat-box');
@@ -662,10 +663,8 @@ function chatAppend(text, type = 'agent') {
   box.scrollTop = box.scrollHeight;
 }
 
-function startConfigure(description) {
-  if (!description.trim()) return;
-
-  // Connect WebSocket
+function connectConfigurator(description) {
+  // Open WebSocket and send initial configure message
   const wsUrl = `ws://${location.host}/ws/configure`;
   if (ws && ws.readyState < 2) ws.close();
 
@@ -673,9 +672,11 @@ function startConfigure(description) {
   chatAppend('Connecting to AI configurator...', 'system');
 
   ws = new WebSocket(wsUrl);
+  wsReady = false;
 
   ws.addEventListener('open', () => {
     ws.send(JSON.stringify({ type: 'configure', description }));
+    wsReady = true;
   });
 
   ws.addEventListener('message', e => {
@@ -685,7 +686,7 @@ function startConfigure(description) {
         chatAppend(msg.text, 'agent');
       } else if (msg.type === 'done') {
         chatAppend(`Project '${msg.project_name}' created successfully!`, 'done');
-        // Refresh project list in background
+        wsReady = false;
         loadProjects();
       } else if (msg.type === 'error') {
         chatAppend(`Error: ${msg.text}`, 'error');
@@ -697,12 +698,27 @@ function startConfigure(description) {
 
   ws.addEventListener('error', () => {
     chatAppend('WebSocket error. Is the server running?', 'error');
+    wsReady = false;
   });
 
   ws.addEventListener('close', () => {
     chatAppend('Session closed.', 'system');
     ws = null;
+    wsReady = false;
   });
+}
+
+function sendChatMessage(text) {
+  if (!text.trim()) return;
+
+  if (!ws || !wsReady) {
+    // First message — open the configurator connection
+    connectConfigurator(text);
+  } else {
+    // Subsequent messages — send as a reply in the ongoing conversation
+    chatAppend(text, 'user');
+    ws.send(JSON.stringify({ type: 'reply', text }));
+  }
 }
 
 $('#chat-send-btn').addEventListener('click', () => {
@@ -710,9 +726,7 @@ $('#chat-send-btn').addEventListener('click', () => {
   const text  = input.value.trim();
   if (!text) return;
   input.value = '';
-  startConfigure(text);
-  $('#chat-send-btn').disabled = true;
-  setTimeout(() => { $('#chat-send-btn').disabled = false; }, 2000);
+  sendChatMessage(text);
 });
 
 $('#chat-input').addEventListener('keydown', e => {
@@ -721,6 +735,8 @@ $('#chat-input').addEventListener('keydown', e => {
 
 $('#chat-reset-btn').addEventListener('click', () => {
   if (ws) ws.close();
+  ws = null;
+  wsReady = false;
   $('#chat-box').innerHTML = '<div class="chat-msg system">Describe your project to get started. Press Enter or click Send.</div>';
   $('#chat-input').value = '';
 });

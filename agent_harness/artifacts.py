@@ -159,6 +159,142 @@ class GenerationResult:
         )
 
 
+@dataclass
+class EvaluationCheck:
+    """A single concrete, measurable check within a dimension.
+
+    Two types:
+    - pass_fail: binary — the evaluator verifies a condition (e.g., "no data leakage")
+    - metric: the evaluator computes a number and the harness checks against threshold
+    """
+    name: str                        # e.g., "no_data_leakage", "pr_auc"
+    check_type: str                  # "pass_fail" or "metric"
+    description: str                 # What this check verifies
+    threshold: float | None = None   # Required for "metric" type — harness enforces this
+
+    def to_json(self) -> dict:
+        d: dict = {"name": self.name, "check_type": self.check_type, "description": self.description}
+        if self.threshold is not None:
+            d["threshold"] = self.threshold
+        return d
+
+    @classmethod
+    def from_json(cls, data: dict) -> Self:
+        return cls(
+            name=data["name"],
+            check_type=data.get("check_type", "pass_fail"),
+            description=data.get("description", ""),
+            threshold=data.get("threshold"),
+        )
+
+
+@dataclass
+class EvaluationDimension:
+    """A declared evaluation dimension with concrete checks.
+
+    Each dimension groups related checks. The evaluator MUST run every check
+    and report evidence. The harness enforces metric thresholds and pass/fail
+    results — the AI does not decide pass/fail, it only produces measurements.
+
+    Example (data_quality):
+      checks:
+        - {name: "no_data_leakage", type: "pass_fail", description: "No target leakage in features"}
+        - {name: "missing_values_pct", type: "metric", threshold: 0.05, description: "< 5% missing"}
+    """
+    name: str                        # e.g., "data_quality", "model_performance"
+    description: str                 # What this dimension covers
+    severity: str                    # "blocking" (fails task) or "warning" (logged only)
+    checks: list[EvaluationCheck]    # Concrete, measurable checks
+
+    def to_json(self) -> dict:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "severity": self.severity,
+            "checks": [c.to_json() for c in self.checks],
+        }
+
+    @classmethod
+    def from_json(cls, data: dict) -> Self:
+        return cls(
+            name=data["name"],
+            description=data.get("description", ""),
+            severity=data.get("severity", "blocking"),
+            checks=[EvaluationCheck.from_json(c) for c in data.get("checks", [])],
+        )
+
+    def to_markdown(self) -> str:
+        lines = [f"### {self.name} [{self.severity}]", f"{self.description}", ""]
+        for c in self.checks:
+            if c.check_type == "metric" and c.threshold is not None:
+                lines.append(f"- **{c.name}** [metric, threshold: {c.threshold}]: {c.description}")
+            else:
+                lines.append(f"- **{c.name}** [pass/fail]: {c.description}")
+        return "\n".join(lines)
+
+
+@dataclass
+class EvaluationProgressEntry:
+    """One evaluation snapshot in the progress history."""
+    iteration: int
+    task_id: str
+    scores: dict[str, float]
+    verdict: str                     # Verdict value string
+    threshold_overridden: bool       # True if harness overrode the evaluator's verdict
+    timestamp: str
+
+    def to_json(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_json(cls, data: dict) -> Self:
+        return cls(**data)
+
+
+@dataclass
+class EvaluationProgress:
+    """Persistent evaluation history across iterations for a run.
+
+    Stored at runs/<id>/evaluation_progress.json. Enables:
+    - Trend tracking: are scores improving across retries?
+    - Regression detection: did a retry make things worse?
+    - Post-mortem analysis: what was the trajectory?
+    """
+    entries: list[EvaluationProgressEntry]
+
+    def add(self, entry: EvaluationProgressEntry) -> None:
+        self.entries.append(entry)
+
+    def trends(self) -> dict[str, list[float]]:
+        """Return score trends per dimension across all entries."""
+        result: dict[str, list[float]] = {}
+        for entry in self.entries:
+            for dim, score in entry.scores.items():
+                result.setdefault(dim, []).append(score)
+        return result
+
+    def to_json(self) -> dict:
+        return {"entries": [e.to_json() for e in self.entries]}
+
+    @classmethod
+    def from_json(cls, data: dict) -> Self:
+        return cls(
+            entries=[EvaluationProgressEntry.from_json(e) for e in data.get("entries", [])]
+        )
+
+    def save(self, path) -> None:
+        from pathlib import Path
+        Path(path).write_text(json.dumps(self.to_json(), indent=2), encoding="utf-8")
+
+    @classmethod
+    def load(cls, path) -> Self:
+        from pathlib import Path
+        p = Path(path)
+        if not p.exists():
+            return cls(entries=[])
+        return cls.from_json(json.loads(p.read_text(encoding="utf-8")))
+
+
 class Verdict(str, Enum):
     ADVANCE_TASK = "advance_task"
     RETRY_TASK = "retry_task"

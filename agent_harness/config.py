@@ -55,6 +55,9 @@ class HarnessConfig:
     structured_output: bool = True   # Use schema-validated structured output (recommended)
     max_retries_per_task: int = 5         # Hard ceiling on attempts per task
     no_progress_threshold: int = 3        # Pause if same failure repeats this many times
+    score_thresholds: dict[str, float] | None = None  # Hard gates: {"correctness": 0.8, "quality": 0.7}
+    evaluator_mcp_servers: dict | None = None  # Project-specific MCP servers for evaluation
+    evaluation_dimensions: list[dict] | None = None  # Declared dimensions with thresholds and descriptions
 
     # ------------------------------------------------------------------
     # Loading
@@ -106,6 +109,9 @@ class HarnessConfig:
             structured_output=bool(raw.get("structured_output", True)),
             max_retries_per_task=int(raw.get("max_retries_per_task", 5)),
             no_progress_threshold=int(raw.get("no_progress_threshold", 3)),
+            score_thresholds=raw.get("score_thresholds"),
+            evaluator_mcp_servers=raw.get("evaluator_mcp_servers"),
+            evaluation_dimensions=raw.get("evaluation_dimensions"),
         )
 
     # ------------------------------------------------------------------

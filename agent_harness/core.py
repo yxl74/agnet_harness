@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Protocol
 
 from agent_harness.artifacts import (
+    EvaluationDimension,
+    EvaluationProgress,
+    EvaluationProgressEntry,
     EvaluationResult,
     GenerationResult,
     Plan,
@@ -86,7 +89,14 @@ class Orchestrator:
         self.config = config
         self.run_dir = Path(run_dir)
         self.state = RunState.new(run_id=self.run_dir.name)
-        self._failure_fingerprints: list[str] = []  # Tracks fingerprints for current task
+        self._failure_fingerprints: list[str] = []
+        self._eval_progress = EvaluationProgress.load(self.run_dir / "evaluation_progress.json")
+
+        # Parse declared evaluation dimensions
+        if config.evaluation_dimensions:
+            self._dimensions = [EvaluationDimension.from_json(d) for d in config.evaluation_dimensions]
+        else:
+            self._dimensions = []
         if config.target_repo:
             self.project_cwd = str(Path(config.target_repo).resolve())
         else:
@@ -217,6 +227,19 @@ class Orchestrator:
                 )
                 self._track(eval_exec)
                 evaluation = eval_exec.result
+
+                # --- Threshold enforcement ---
+                # The orchestrator enforces hard score thresholds, overriding
+                # the evaluator's verdict if any score falls below its gate.
+                # This prevents evaluator leniency — the exact problem the
+                # Anthropic blog identified.
+                was_overridden = evaluation.verdict == Verdict.ADVANCE_TASK
+                evaluation = self._enforce_thresholds(evaluation)
+                was_overridden = was_overridden and evaluation.verdict != Verdict.ADVANCE_TASK
+
+                # --- Track evaluation progress ---
+                self._record_eval_progress(evaluation, task, was_overridden)
+
                 self._write_task_artifacts("evaluation", task, evaluation)
                 self.state.record_attempt()
                 self._save_state()
@@ -280,6 +303,85 @@ class Orchestrator:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _record_eval_progress(
+        self, evaluation: EvaluationResult, task: Task, threshold_overridden: bool
+    ) -> None:
+        """Record an evaluation snapshot to the persistent progress file."""
+        from datetime import datetime, timezone
+        entry = EvaluationProgressEntry(
+            iteration=self.state.iterations_on_current_task,
+            task_id=task.id,
+            scores=dict(evaluation.scores),
+            verdict=evaluation.verdict.value,
+            threshold_overridden=threshold_overridden,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+        self._eval_progress.add(entry)
+        self._eval_progress.save(self.run_dir / "evaluation_progress.json")
+
+    def _enforce_thresholds(self, evaluation: EvaluationResult) -> EvaluationResult:
+        """Override verdict to RETRY_TASK if any blocking check fails.
+
+        Two enforcement layers:
+
+        1. **Declared dimensions** (evaluation_dimensions in config):
+           For each dimension's checks, verify pass_fail checks passed and
+           metric checks meet their thresholds — using the evaluator's
+           reported check_results and scores as evidence.
+
+        2. **Legacy score_thresholds** (score_thresholds in config):
+           Simple score >= threshold check. Kept for backward compat.
+
+        Only overrides ADVANCE_TASK — never softens HALT or REPLAN.
+        """
+        if evaluation.verdict != Verdict.ADVANCE_TASK:
+            return evaluation
+
+        failing: list[str] = []
+
+        # --- Layer 1: Declared dimension checks ---
+        if self._dimensions:
+            # Build a lookup from evaluator's check_results
+            reported_checks = {cr.name: cr for cr in evaluation.check_results}
+
+            for dim in self._dimensions:
+                if dim.severity != "blocking":
+                    continue
+                for check in dim.checks:
+                    reported = reported_checks.get(check.name)
+                    if check.check_type == "pass_fail":
+                        if reported is None or not reported.passed:
+                            evidence = reported.output if reported else "not reported"
+                            failing.append(f"{dim.name}/{check.name}: FAILED ({evidence})")
+                    elif check.check_type == "metric" and check.threshold is not None:
+                        actual = evaluation.scores.get(check.name)
+                        if actual is None:
+                            failing.append(f"{dim.name}/{check.name}: not measured (required)")
+                        elif actual < check.threshold:
+                            failing.append(f"{dim.name}/{check.name}: {actual:.4f} < {check.threshold} threshold")
+
+        # --- Layer 2: Legacy score_thresholds ---
+        if self.config.score_thresholds and not self._dimensions:
+            for dimension, threshold in self.config.score_thresholds.items():
+                actual = evaluation.scores.get(dimension)
+                if actual is not None and actual < threshold:
+                    failing.append(f"{dimension}: {actual:.2f} < {threshold:.2f}")
+
+        if not failing:
+            return evaluation
+
+        from dataclasses import replace
+        return replace(
+            evaluation,
+            verdict=Verdict.RETRY_TASK,
+            feedback=(
+                "Threshold enforcement: evaluator approved but checks below gates.\n"
+                "Failing checks:\n"
+                + "\n".join(f"  - {f}" for f in failing)
+                + f"\n\nOriginal feedback: {evaluation.feedback}"
+            ),
+        )
 
     def _compute_failure_fingerprint(self, evaluation: EvaluationResult) -> str:
         """Compute a fingerprint from an evaluation to detect repeated failures."""

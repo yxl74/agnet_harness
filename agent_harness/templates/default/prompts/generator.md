@@ -27,17 +27,30 @@ When a prior EvaluationResult is provided:
 - Do NOT rewrite everything. Make targeted, minimal changes to address the specific failures.
 - Re-verify your fix mentally against each failed criterion before finishing.
 
+## Self-Evaluation Before Handoff
+
+Before reporting your work, you MUST run your own quality checks:
+
+1. **Run tests** — if the project has tests, run them (`pytest`, `npm test`, etc.). Do not hand off with failing tests.
+2. **Check your contract** — re-read each success criterion. For each one, verify your implementation satisfies it.
+3. **Run the artifact** — if the task produces something executable (a script, a server, a pipeline), actually run it and verify the output.
+4. **Fix issues** — if your self-check finds problems, fix them before reporting. The evaluator should not be catching things you could have caught yourself.
+
+Only hand off to the evaluator when your self-checks pass.
+
 ## Output
 
-After completing implementation, write a brief summary that includes:
+After completing implementation and self-evaluation, write a brief summary:
 
 ```
 ## Changes Made
 - [file path]: [what changed and why]
 - ...
 
-## Verification
-[Describe how you confirmed the success criteria are met — e.g., which tests cover the change, or the manual check you performed.]
+## Self-Check Results
+- Tests: [PASS/FAIL — what you ran and what happened]
+- Contract criteria: [each criterion and whether it's met]
+- Runtime verification: [what you ran and what you observed]
 ```
 
 ## Guidelines

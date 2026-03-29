@@ -340,7 +340,7 @@ async def configure_project(websocket: WebSocket) -> None:
 
     # SDK is available — use it to interview the user and write project files
     await websocket.send_json(
-        {"type": "message", "text": "Starting AI configurator..."}
+        {"type": "message", "text": "Starting AI configurator — I'll walk you through setting up your project step by step."}
     )
 
     try:
@@ -381,55 +381,151 @@ async def _stub_configure(websocket: WebSocket, description: str) -> str | None:
     return project_name
 
 
+_CONFIGURATOR_SYSTEM_PROMPT = """\
+You are an expert AI configurator for the Agent Harness framework. Your job is
+to interview the user about their project and progressively build a complete
+project configuration — config.json and system prompts for the planner,
+generator, and evaluator agents.
+
+## Interview Process
+
+Work through these sections IN ORDER. For each section, ask questions, discuss
+trade-offs with the user, then fill in that part of the config. Do NOT try to
+generate everything at once — this is a conversation.
+
+### 1. Project Basics
+- What are you building? (web app, ML model, data pipeline, API, etc.)
+- What's the tech stack?
+- Suggest a project name (lowercase, hyphenated).
+- After agreement: write config.json with name, model, budget.
+
+### 2. Evaluation Dimensions
+This is the most important section. The harness uses evidence-based evaluation,
+not subjective scoring. For each dimension:
+
+- Ask what "good" looks like CONCRETELY for their domain.
+- Push back on vague criteria — "high quality" is not a check. "PR-AUC >= 0.85
+  on holdout set" is a check.
+- For each dimension, define concrete checks that are either:
+  - pass_fail: binary yes/no (e.g., "no data leakage")
+  - metric: a measurable number with a concrete threshold (e.g., "test
+    coverage >= 80%", "P95 latency < 200ms")
+- Ask whether each dimension is "blocking" (fails the task) or "warning".
+- Challenge arbitrary numbers: "What does 0.85 mean? Is that based on your
+  baseline? Your production bar? Or a guess?"
+
+Example conversation flow:
+  You: "For data quality, what concrete checks matter?"
+  User: "No leakage, balanced classes, clean labels"
+  You: "For class balance — what ratio? Is 20% minority realistic or do you
+       have heavily imbalanced data?"
+  User: "It's imbalanced, 5:1 ratio is normal"
+  You: "OK, so the check is: minority class >= 15% of majority — that's
+       slightly above your natural ratio to push for better balance. Sound right?"
+
+After agreement on dimensions: update config.json with evaluation_dimensions.
+
+### 3. Evaluator Capabilities
+- Does the evaluator need special tools? (MCP servers, custom scripts)
+- For ML: does it need to run model inference? Access a test dataset?
+- For web apps: does it need browser automation?
+- After agreement: update config.json with evaluator_mcp_servers and tool lists.
+
+### 4. Agent Prompts
+Based on everything discussed, generate:
+- prompts/planner.md — how to decompose tasks for this domain
+- prompts/generator.md — coding/building style for this stack
+- prompts/evaluator.md — evaluation strategy referencing the declared dimensions
+Write these files to the project directory.
+
+### 5. Review
+Show the user the complete config.json and ask for final adjustments.
+
+## Rules
+- One section at a time. Don't skip ahead.
+- Ask ONE question at a time. Don't overwhelm with multiple questions.
+- When filling in config, show the user what you're writing and get approval.
+- Push back on vague criteria. Your job is to make evaluation concrete.
+- Use the Write tool to create files in the project directory.
+
+## Output
+When completely done, output: PROJECT_NAME: <name>
+
+The projects directory is at: {projects_dir}
+"""
+
+
 async def _sdk_configure(
     websocket: WebSocket, description: str, sdk: Any
 ) -> str:
-    """Use claude-agent-sdk to interview the user and generate project files."""
-    projects_dir = _projects_dir()
+    """Use claude-agent-sdk to run a multi-turn configurator conversation."""
+    from claude_agent_sdk import (
+        ClaudeAgentOptions,
+        ClaudeSDKClient,
+        AssistantMessage,
+        ResultMessage,
+        SystemMessage,
+        TextBlock,
+    )
 
-    system_prompt = (
-        "You are an AI assistant that helps configure an Agent Harness project. "
-        "The user will describe a task or project they want to build. "
-        "You should:\n"
-        "1. Ask any clarifying questions needed to understand the project requirements.\n"
-        "2. Generate a project name (lowercase, hyphenated).\n"
-        "3. Create a config.json with appropriate settings.\n"
-        "4. Create planner.md, generator.md, and evaluator.md prompts.\n"
-        "5. Write these files to the projects/<name>/ directory.\n\n"
-        f"The projects directory is at: {projects_dir.resolve()}\n\n"
-        "When you are done, output a line that starts with 'PROJECT_NAME:' "
-        "followed by the project name you created."
+    projects_dir = _projects_dir()
+    system_prompt = _CONFIGURATOR_SYSTEM_PROMPT.format(
+        projects_dir=projects_dir.resolve()
     )
 
     user_message = f"I want to create an agent harness project for: {description}"
+    all_output: list[str] = []
 
-    collected_output: list[str] = []
+    options = ClaudeAgentOptions(
+        system_prompt=system_prompt,
+        allowed_tools=["Write", "Read", "Bash", "Glob"],
+        cwd=str(projects_dir.resolve()),
+        permission_mode="acceptEdits",
+    )
 
-    async for event in sdk.query(
-        prompt=user_message,
-        system=system_prompt,
-        tools=["Write", "Read", "Bash"],
-    ):
-        # Stream progress back over the WebSocket
-        if hasattr(event, "type"):
-            if event.type == "text":
-                text: str = getattr(event, "text", "")
-                if text:
-                    collected_output.append(text)
-                    await websocket.send_json({"type": "message", "text": text})
-            elif event.type == "tool_use":
-                tool_name = getattr(event, "name", "tool")
-                await websocket.send_json(
-                    {"type": "message", "text": f"[Using tool: {tool_name}]"}
-                )
+    async with ClaudeSDKClient(options=options) as client:
+        await client.query(user_message)
 
-    # Extract project name from SDK output
+        # Multi-turn conversation loop
+        while True:
+            turn_output: list[str] = []
+
+            async for message in client.receive_response():
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock) and block.text:
+                            turn_output.append(block.text)
+                            await websocket.send_json({"type": "message", "text": block.text})
+
+                elif isinstance(message, ResultMessage):
+                    if message.result:
+                        turn_output.append(message.result)
+                        await websocket.send_json({"type": "message", "text": message.result})
+
+            all_output.extend(turn_output)
+
+            # Check if the configurator is done
+            full_text = "\n".join(all_output)
+            if "PROJECT_NAME:" in full_text:
+                break
+
+            # Not done — wait for user's reply over WebSocket
+            try:
+                raw = await websocket.receive_text()
+                reply = json.loads(raw)
+                user_reply = reply.get("text", reply.get("description", ""))
+                if not user_reply:
+                    continue
+                await client.query(user_reply)
+            except WebSocketDisconnect:
+                break
+
+    # Extract project name from output
     import re
-    full_output = "\n".join(collected_output)
+    full_output = "\n".join(all_output)
     match = re.search(r"PROJECT_NAME:\s*(\S+)", full_output)
     if match:
         return match.group(1)
 
-    # Fallback: derive from description
     project_name = re.sub(r"[^a-z0-9]+", "-", description.lower().strip())[:40].strip("-")
     return project_name or "new-project"

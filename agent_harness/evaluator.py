@@ -102,12 +102,16 @@ class DefaultEvaluator:
         model: str,
         cwd: str,
         structured_output: bool = True,
+        evaluation_dimensions: list[dict] | None = None,
+        mcp_servers: dict | None = None,
     ) -> None:
         self.system_prompt = system_prompt
         self.tools = tools
         self.model = model
         self.cwd = cwd
         self.structured_output = structured_output
+        self.evaluation_dimensions = evaluation_dimensions or []
+        self.mcp_servers = mcp_servers or {}
         self._current_task_id: str | None = None
         self._task_eval_count = 0
 
@@ -166,6 +170,8 @@ class DefaultEvaluator:
                 cwd=cwd,
                 permission_mode="bypassPermissions",
             )
+            if self.mcp_servers:
+                options_kwargs["mcp_servers"] = self.mcp_servers
             if self.structured_output:
                 options_kwargs["output_format"] = EVALUATION_SCHEMA
 
@@ -242,6 +248,19 @@ class DefaultEvaluator:
             lines += ["", "### Files Changed"]
             for f in result.files_changed:
                 lines.append(f"- `{f}`")
+
+        # Inject declared evaluation dimensions if configured
+        if self.evaluation_dimensions:
+            lines += ["", "### Required Evaluation Dimensions", ""]
+            lines.append("You MUST score on each of these dimensions (0.0–1.0):")
+            lines.append("")
+            for dim in self.evaluation_dimensions:
+                threshold = dim.get("threshold", 0.0)
+                severity = dim.get("severity", "blocking")
+                lines.append(
+                    f"- **{dim['name']}** [{severity}, threshold: {threshold}]: {dim.get('description', '')}"
+                )
+            lines.append("")
 
         if self.structured_output:
             lines += [
