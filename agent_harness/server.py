@@ -126,13 +126,12 @@ async def get_project_config(name: str) -> JSONResponse:
 
     config = json.loads(config_path.read_text(encoding="utf-8"))
 
-    # Also load prompt summaries (first 200 chars of each)
+    # Load full prompts
     prompts: dict[str, str] = {}
     prompts_dir = project_dir / "prompts"
     if prompts_dir.exists():
         for md_file in prompts_dir.glob("*.md"):
-            text = md_file.read_text(encoding="utf-8")
-            prompts[md_file.stem] = text[:200] + ("..." if len(text) > 200 else "")
+            prompts[md_file.stem] = md_file.read_text(encoding="utf-8")
 
     return JSONResponse(content={"config": config, "prompts": prompts})
 

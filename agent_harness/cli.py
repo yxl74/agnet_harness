@@ -80,12 +80,14 @@ def cmd_run(args: argparse.Namespace) -> int:
                 model=config.model,
                 cwd=cwd,
                 structured_output=config.structured_output,
+                effort=config.effort,
             )
             generator = DefaultGenerator(
                 system_prompt=config.generator_prompt,
                 tools=config.generator_tools,
                 model=config.model,
                 cwd=cwd,
+                effort=config.effort,
             )
             evaluator = DefaultEvaluator(
                 system_prompt=config.evaluator_prompt,
@@ -95,6 +97,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 structured_output=config.structured_output,
                 evaluation_dimensions=config.evaluation_dimensions,
                 mcp_servers=config.evaluator_mcp_servers,
+                effort=config.effort,
             )
         else:
             planner = None  # type: ignore[assignment]
@@ -166,12 +169,14 @@ def cmd_resume(args: argparse.Namespace) -> int:
                 model=config.model,
                 cwd=cwd,
                 structured_output=config.structured_output,
+                effort=config.effort,
             )
             generator = DefaultGenerator(
                 system_prompt=config.generator_prompt,
                 tools=config.generator_tools,
                 model=config.model,
                 cwd=cwd,
+                effort=config.effort,
             )
             evaluator = DefaultEvaluator(
                 system_prompt=config.evaluator_prompt,
@@ -181,6 +186,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
                 structured_output=config.structured_output,
                 evaluation_dimensions=config.evaluation_dimensions,
                 mcp_servers=config.evaluator_mcp_servers,
+                effort=config.effort,
             )
         except ImportError:
             planner = None  # type: ignore[assignment]

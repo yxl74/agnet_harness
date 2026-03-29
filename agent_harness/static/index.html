@@ -355,19 +355,35 @@
     .stage-prompt-preview {
       display: none;
       margin-top: .4rem;
-      padding: .6rem .75rem;
+      padding: .75rem .85rem;
       background: var(--bg);
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       font-size: .73rem;
       color: var(--text-dim);
-      line-height: 1.55;
+      line-height: 1.6;
       white-space: pre-wrap;
       word-break: break-word;
-      max-height: 160px;
+      max-height: 400px;
       overflow-y: auto;
     }
     .stage-prompt-preview.open { display: block; }
+
+    /* Stage metadata row */
+    .stage-meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .5rem;
+      margin-bottom: .5rem;
+    }
+    .stage-meta-tag {
+      font-family: var(--mono);
+      font-size: .65rem;
+      padding: 2px 7px;
+      border-radius: 3px;
+      background: rgba(45,212,168,.1);
+      color: var(--accent-2);
+    }
 
     /* Vertical Arrow */
     .stage-arrow-v {
@@ -484,10 +500,14 @@
     }
     .config-val {
       font-family: var(--mono);
-      font-size: .85rem;
+      font-size: .82rem;
       font-weight: 600;
       color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
+    .config-val[title] { cursor: help; }
 
     /* Launch Button */
     .launch-bar {
@@ -676,10 +696,12 @@
           <!-- Config Summary -->
           <div class="config-summary" id="config-summary">
             <div class="config-kv"><span class="config-key">Model</span><span class="config-val" id="cfg-model">&mdash;</span></div>
+            <div class="config-kv"><span class="config-key">Effort</span><span class="config-val" id="cfg-effort">&mdash;</span></div>
+            <div class="config-kv"><span class="config-key">Thinking</span><span class="config-val" id="cfg-thinking">&mdash;</span></div>
             <div class="config-kv"><span class="config-key">Budget</span><span class="config-val" id="cfg-budget">&mdash;</span></div>
-            <div class="config-kv"><span class="config-key">Max Retries</span><span class="config-val" id="cfg-retries">&mdash;</span></div>
+            <div class="config-kv"><span class="config-key">Retries</span><span class="config-val" id="cfg-retries">&mdash;</span></div>
             <div class="config-kv"><span class="config-key">No-Progress</span><span class="config-val" id="cfg-noprog">&mdash;</span></div>
-            <div class="config-kv"><span class="config-key">Target Repo</span><span class="config-val" id="cfg-repo">&mdash;</span></div>
+            <div class="config-kv"><span class="config-key">Target Repo</span><span class="config-val" id="cfg-repo" title="">&mdash;</span></div>
             <div class="config-kv"><span class="config-key">Output</span><span class="config-val" id="cfg-structured">&mdash;</span></div>
           </div>
 
@@ -895,23 +917,33 @@ function renderPipeline(config, prompts) {
 
   // Config summary
   $('#cfg-model').textContent = config.model || '';
+  $('#cfg-effort').textContent = config.effort || 'high';
+  $('#cfg-thinking').textContent = 'adaptive';
   $('#cfg-budget').textContent = config.max_budget_usd != null ? `$${config.max_budget_usd}` : '';
   $('#cfg-retries').textContent = config.max_retries_per_task ?? '5';
   $('#cfg-noprog').textContent = config.no_progress_threshold ?? '3';
-  $('#cfg-repo').textContent = config.target_repo || 'greenfield';
+  const repoPath = config.target_repo || 'greenfield';
+  const cfgRepo = $('#cfg-repo');
+  cfgRepo.textContent = repoPath;
+  cfgRepo.title = repoPath;  // Full path on hover
   $('#cfg-structured').textContent = config.structured_output !== false ? 'structured' : 'legacy';
 
   // Build vertical stage cards
+  const effort = config.effort || 'high';
+  const model = config.model || 'claude-opus-4-6';
+
   const stages = [
     {
       key: 'planner', name: 'PLANNER', step: 'Step 1',
       desc: 'Explores the codebase, decomposes the task into ordered sub-tasks with contracts defining "done".',
       tools: config.planner_tools,
+      meta: [`model: ${model}`, `effort: ${effort}`, 'thinking: adaptive', 'mode: bypassPermissions'],
     },
     {
       key: 'generator', name: 'GENERATOR', step: 'Step 2',
       desc: 'Implements one task at a time. Self-evaluates (runs tests, checks contract) before handing off. Modifies working tree only.',
       tools: config.generator_tools,
+      meta: [`model: ${model}`, `effort: ${effort}`, 'thinking: adaptive', 'mode: acceptEdits', 'session: long-lived per task'],
     },
     {
       key: 'evaluator', name: 'EVALUATOR', step: 'Step 3',
@@ -919,6 +951,7 @@ function renderPipeline(config, prompts) {
       tools: config.evaluator_tools,
       dims: config.evaluation_dimensions,
       mcp: config.evaluator_mcp_servers,
+      meta: [`model: ${model}`, `effort: ${effort}`, 'thinking: adaptive', 'mode: bypassPermissions', 'session: fresh per eval'],
     },
   ];
 
@@ -963,6 +996,7 @@ function renderPipeline(config, prompts) {
           <span class="stage-step">${s.step}</span>
         </div>
         <div class="stage-desc">${s.desc}</div>
+        <div class="stage-meta-row">${(s.meta || []).map(m => `<span class="stage-meta-tag">${esc(m)}</span>`).join('')}</div>
         <div class="stage-tools">${toolsHtml}</div>
         ${mcpHtml}
         ${promptText ? `

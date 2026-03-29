@@ -57,6 +57,7 @@ class HarnessConfig:
     no_progress_threshold: int = 3        # Pause if same failure repeats this many times
     score_thresholds: dict[str, float] | None = None  # Hard gates: {"correctness": 0.8, "quality": 0.7}
     evaluator_mcp_servers: dict | None = None  # Project-specific MCP servers for evaluation
+    effort: str = "high"                       # Reasoning effort: "low", "medium", "high", "max"
     evaluation_dimensions: list[dict] | None = None  # Declared dimensions with thresholds and descriptions
 
     # ------------------------------------------------------------------
@@ -111,6 +112,7 @@ class HarnessConfig:
             no_progress_threshold=int(raw.get("no_progress_threshold", 3)),
             score_thresholds=raw.get("score_thresholds"),
             evaluator_mcp_servers=raw.get("evaluator_mcp_servers"),
+            effort=raw.get("effort", "high"),
             evaluation_dimensions=raw.get("evaluation_dimensions"),
         )
 

@@ -104,12 +104,14 @@ class DefaultEvaluator:
         structured_output: bool = True,
         evaluation_dimensions: list[dict] | None = None,
         mcp_servers: dict | None = None,
+        effort: str = "high",
     ) -> None:
         self.system_prompt = system_prompt
         self.tools = tools
         self.model = model
         self.cwd = cwd
         self.structured_output = structured_output
+        self.effort = effort
         self.evaluation_dimensions = evaluation_dimensions or []
         self.mcp_servers = mcp_servers or {}
         self._current_task_id: str | None = None
@@ -169,6 +171,8 @@ class DefaultEvaluator:
                 model=self.model,
                 cwd=cwd,
                 permission_mode="bypassPermissions",
+                effort=self.effort,
+                thinking={"type": "adaptive"},
             )
             if self.mcp_servers:
                 options_kwargs["mcp_servers"] = self.mcp_servers

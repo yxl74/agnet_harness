@@ -7,5 +7,6 @@
   "planner_tools": ["Read", "Glob", "Grep"],
   "target_repo": null,
   "session_mode": "long_lived",
-  "structured_output": true
+  "structured_output": true,
+  "effort": "high"
 }

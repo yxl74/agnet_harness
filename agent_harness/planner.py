@@ -107,12 +107,14 @@ class DefaultPlanner:
         model: str,
         cwd: str,
         structured_output: bool = True,
+        effort: str = "high",
     ) -> None:
         self.system_prompt = system_prompt
         self.tools = tools
         self.model = model
         self.cwd = cwd
         self.structured_output = structured_output
+        self.effort = effort
         self._session_id: str | None = None
         self._plan_version = 0
 
@@ -168,6 +170,8 @@ class DefaultPlanner:
                 model=self.model,
                 cwd=cwd,
                 permission_mode="bypassPermissions",
+                effort=self.effort,
+                thinking={"type": "adaptive"},
             )
             if self.structured_output:
                 options_kwargs["output_format"] = PLAN_SCHEMA

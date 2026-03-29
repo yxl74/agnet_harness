@@ -39,11 +39,13 @@ class DefaultGenerator:
         tools: list[str],
         model: str,
         cwd: str,
+        effort: str = "high",
     ) -> None:
         self.system_prompt = system_prompt
         self.tools = tools
         self.model = model
         self.cwd = cwd
+        self.effort = effort
         self._session_id: str | None = None
         self._current_task_id: str | None = None
         self._task_iteration = 0
@@ -98,6 +100,8 @@ class DefaultGenerator:
                 model=self.model,
                 cwd=cwd,
                 permission_mode="acceptEdits",
+                effort=self.effort,
+                thinking={"type": "adaptive"},
             )
             # Resume the same session when retrying
             if self._session_id:
