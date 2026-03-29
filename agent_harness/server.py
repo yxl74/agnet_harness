@@ -292,7 +292,8 @@ async def configure_project(websocket: WebSocket) -> None:
     """WebSocket endpoint for AI-assisted project configuration.
 
     Protocol (JSON messages):
-      Client -> Server:  {"type": "configure", "description": "<free-form description>"}
+      Client -> Server:  {"type": "configure", "description": "...", "target_repo": "/path/to/repo" (optional)}
+      Client -> Server:  {"type": "reply", "text": "user's follow-up answer"}
       Server -> Client:  {"type": "message",   "text": "<progress text>"}
       Server -> Client:  {"type": "done",       "project_name": "<name>"}
       Server -> Client:  {"type": "error",      "text": "<error message>"}
@@ -314,6 +315,7 @@ async def configure_project(websocket: WebSocket) -> None:
         return
 
     description: str = msg["description"]
+    target_repo: str | None = msg.get("target_repo")
 
     # Try to use the SDK; fall back to a stub configurator if unavailable
     try:
@@ -344,7 +346,7 @@ async def configure_project(websocket: WebSocket) -> None:
     )
 
     try:
-        project_name = await _sdk_configure(websocket, description, sdk)
+        project_name = await _sdk_configure(websocket, description, sdk, target_repo=target_repo)
         # Verify the project was actually created before declaring success
         project_dir = _projects_dir() / project_name
         config_path = project_dir / "config.json"
@@ -402,11 +404,25 @@ Work through these sections IN ORDER. For each section, ask questions, discuss
 trade-offs with the user, then fill in that part of the config. Do NOT try to
 generate everything at once — this is a conversation.
 
+### 0. Codebase Exploration (if target_repo provided)
+BEFORE asking any questions, explore the existing codebase:
+- Use Glob to understand the project structure (directories, key files)
+- Use Read to examine entry points, config files, test suites, README
+- Use Grep to find patterns (model definitions, data loading, evaluation scripts)
+- Build a mental model of: tech stack, architecture, data flow, test coverage
+- Summarize what you found to the user: "I've explored your codebase. Here's
+  what I see: [summary]. Let me ask some questions to configure the harness."
+
+This step is critical — your interview questions should be INFORMED by what
+you found in the code, not generic. If you see a PyTorch training loop, ask
+about training-specific evaluation. If you see a FastAPI app, ask about
+endpoint testing. If you see test files, reference them by name.
+
 ### 1. Project Basics
 - What are you building? (web app, ML model, data pipeline, API, etc.)
-- What's the tech stack?
+- What's the tech stack? (If you explored the codebase, confirm what you found.)
 - Suggest a project name (lowercase, hyphenated).
-- After agreement: write config.json with name, model, budget.
+- After agreement: write config.json with name, model, budget, target_repo.
 
 ### 2. Evaluation Dimensions
 This is the most important section. The harness uses evidence-based evaluation,
@@ -465,7 +481,8 @@ The projects directory is at: {projects_dir}
 
 
 async def _sdk_configure(
-    websocket: WebSocket, description: str, sdk: Any
+    websocket: WebSocket, description: str, sdk: Any,
+    target_repo: str | None = None,
 ) -> str:
     """Use claude-agent-sdk to run a multi-turn configurator conversation."""
     from claude_agent_sdk import (
@@ -482,13 +499,23 @@ async def _sdk_configure(
         projects_dir=projects_dir.resolve()
     )
 
+    # Build the initial message with target_repo context if provided
     user_message = f"I want to create an agent harness project for: {description}"
+    if target_repo:
+        user_message += f"\n\nThe existing codebase is at: {target_repo}"
+        user_message += "\nPlease explore the codebase first (Step 0) before asking questions."
+
     all_output: list[str] = []
+
+    # If target_repo is provided, set cwd to the repo so the configurator
+    # can Read/Glob/Grep the actual codebase. It writes project files to
+    # projects_dir via absolute paths.
+    agent_cwd = target_repo if target_repo else str(projects_dir.resolve())
 
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
-        allowed_tools=["Write", "Read", "Bash", "Glob"],
-        cwd=str(projects_dir.resolve()),
+        allowed_tools=["Write", "Read", "Bash", "Glob", "Grep"],
+        cwd=agent_cwd,
         permission_mode="acceptEdits",
     )
 

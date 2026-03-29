@@ -383,18 +383,34 @@
       <span class="section-title">AI Project Configurator</span>
     </div>
     <p style="color:var(--text-dim);font-size:.88rem;margin-bottom:.75rem;">
-      Describe your project and the AI will generate a full harness configuration for you.
+      Describe your project and the AI will generate a full harness configuration.
+      For existing codebases, provide the repo path — the configurator will explore
+      it first and ask informed questions.
     </p>
 
+    <div style="margin-bottom:.75rem;">
+      <label for="target-repo-input" style="color:var(--text-dim);font-size:.82rem;">
+        Existing codebase path (optional):
+      </label>
+      <input
+        type="text"
+        id="target-repo-input"
+        placeholder="/path/to/your/existing/repo"
+        autocomplete="off"
+        style="width:100%;padding:.5rem .75rem;background:var(--surface);border:1px solid var(--border);
+               border-radius:6px;color:var(--text);font-size:.88rem;margin-top:.25rem;"
+      />
+    </div>
+
     <div id="chat-box">
-      <div class="chat-msg system">Describe your project to get started. Press Enter or click Send.</div>
+      <div class="chat-msg system">Describe your project to get started. For existing repos, fill in the path above. Press Enter or click Send.</div>
     </div>
 
     <div id="chat-input-row">
       <input
         type="text"
         id="chat-input"
-        placeholder="e.g. Build a REST API for a todo app using FastAPI and SQLite"
+        placeholder="e.g. Configure harness for my intent alignment model training"
         autocomplete="off"
       />
       <button class="btn-primary" id="chat-send-btn">Send</button>
@@ -668,14 +684,21 @@ function connectConfigurator(description) {
   const wsUrl = `ws://${location.host}/ws/configure`;
   if (ws && ws.readyState < 2) ws.close();
 
+  const targetRepo = $('#target-repo-input').value.trim() || null;
+
   chatAppend(description, 'user');
+  if (targetRepo) {
+    chatAppend(`Codebase: ${targetRepo}`, 'system');
+  }
   chatAppend('Connecting to AI configurator...', 'system');
 
   ws = new WebSocket(wsUrl);
   wsReady = false;
 
   ws.addEventListener('open', () => {
-    ws.send(JSON.stringify({ type: 'configure', description }));
+    const msg = { type: 'configure', description };
+    if (targetRepo) msg.target_repo = targetRepo;
+    ws.send(JSON.stringify(msg));
     wsReady = true;
   });
 
