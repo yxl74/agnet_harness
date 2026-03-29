@@ -305,35 +305,39 @@ async def _run_orchestrator(
             generator=generator,
             evaluator=evaluator,
         )
+        # Persist initial state immediately so the UI shows "planning"
+        # instead of "(initializing...)" during the potentially long planner call
+        orchestrator._save_state()
         await orchestrator.run(task)
 
     except Exception:  # noqa: BLE001
+        import traceback, sys
+        print(f"[agent_harness] Run {run_id} failed:\n{traceback.format_exc()}", file=sys.stderr)
+
         # Persist a FAILED state so the UI can surface the error
         run_dir = projects_dir / project_name / "runs" / run_id
         state_path = run_dir / "run_state.json"
-        if not state_path.exists():
-            run_dir.mkdir(parents=True, exist_ok=True)
-            import traceback
+        run_dir.mkdir(parents=True, exist_ok=True)
 
-            err_payload = {
-                "run_id": run_id,
-                "status": "failed",
-                "status_reason": traceback.format_exc(),
-                "current_phase": "planning",
-                "current_task_index": 0,
-                "total_tasks": 0,
-                "iterations_on_current_task": 0,
-                "plan_version": 0,
-                "completed_task_ids": [],
-                "cumulative_spend_usd": 0.0,
-                "session_ids": {},
-                "artifact_manifest": [],
-                "started_at": datetime.now(timezone.utc).isoformat(),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-            state_path.write_text(
-                json.dumps(err_payload, indent=2), encoding="utf-8"
-            )
+        err_payload = {
+            "run_id": run_id,
+            "status": "failed",
+            "status_reason": traceback.format_exc(),
+            "current_phase": "planning",
+            "current_task_index": 0,
+            "total_tasks": 0,
+            "iterations_on_current_task": 0,
+            "plan_version": 0,
+            "completed_task_ids": [],
+            "cumulative_spend_usd": 0.0,
+            "session_ids": {},
+            "artifact_manifest": [],
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        state_path.write_text(
+            json.dumps(err_payload, indent=2), encoding="utf-8"
+        )
 
 
 @app.post("/api/projects/{name}/run")
