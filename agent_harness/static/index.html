@@ -634,6 +634,7 @@
   <nav>
     <a href="#" data-nav="projects" class="active">Projects</a>
     <a href="#" data-nav="configure">Configure</a>
+    <a href="#" data-nav="runs">Runs</a>
   </nav>
   <div class="spacer"></div>
 </header>
@@ -651,9 +652,9 @@
 
   <!-- VIEW: Runs -->
   <div data-view="runs">
-    <div class="breadcrumb">Projects &rsaquo; <span id="runs-project-name"></span></div>
+    <div class="breadcrumb" id="runs-breadcrumb">Projects &rsaquo; <span id="runs-project-name"></span></div>
     <div class="section-header">
-      <span class="section-title">Runs</span>
+      <span class="section-title" id="runs-title">Runs</span>
       <button class="btn-primary btn-small" id="start-run-btn">+ Start Run</button>
     </div>
     <div id="start-run-form" style="display:none;" class="card">
@@ -795,13 +796,22 @@ $$('[data-nav]').forEach(a => {
     showView(a.dataset.nav);
     if (a.dataset.nav === 'projects') loadProjects();
     if (a.dataset.nav === 'configure') autoLoadPipeline();
+    if (a.dataset.nav === 'runs') loadAllRuns();
   });
 });
 
 async function autoLoadPipeline() {
-  // If a project is already selected, load it
-  if (configuredProject) { await loadPipelineForProject(configuredProject); return; }
-  // Otherwise, auto-detect: if exactly one project exists, load it
+  if (configuredProject) {
+    await loadPipelineForProject(configuredProject);
+    // Show hint that project is already configured — no new agent session needed
+    if (!ws) {
+      $('#chat-box').innerHTML =
+        '<div class="chat-msg system">Project "' + esc(configuredProject) + '" is configured. ' +
+        'Edit settings in the pipeline, or type here to start a new configurator session.</div>';
+    }
+    return;
+  }
+  // Auto-detect: if exactly one project exists, load it
   try {
     const res = await fetch('/api/projects');
     const projects = await res.json();
@@ -851,9 +861,52 @@ $('#new-project-btn').addEventListener('click', () => {
 async function openRuns(name) {
   currentProject = name;
   $('#runs-project-name').textContent = name;
+  $('#runs-breadcrumb').style.display = '';
+  $('#runs-title').textContent = `Runs — ${name}`;
+  $('#start-run-btn').style.display = '';
   showView('runs');
   $('#start-run-form').style.display = 'none';
   await loadRuns();
+}
+
+async function loadAllRuns() {
+  // Show runs across ALL projects — top-level nav tab
+  $('#runs-breadcrumb').style.display = 'none';
+  $('#runs-title').textContent = 'All Runs';
+  $('#start-run-btn').style.display = 'none';
+  $('#start-run-form').style.display = 'none';
+  showView('runs');
+
+  const list = $('#runs-list');
+  list.innerHTML = '<div class="empty-state"><span class="spinner">&#x21bb;</span></div>';
+  try {
+    const projRes = await fetch('/api/projects');
+    const projects = await projRes.json();
+    let allRuns = [];
+    for (const p of projects) {
+      try {
+        const runsRes = await fetch(`/api/projects/${enc(p.name)}/runs`);
+        const runs = await runsRes.json();
+        for (const r of runs) { r._project = p.name; allRuns.push(r); }
+      } catch { /* skip */ }
+    }
+    if (!allRuns.length) { list.innerHTML = '<div class="empty-state">No runs across any project.</div>'; return; }
+    // Sort by run_id descending (newest first)
+    allRuns.sort((a, b) => b.run_id.localeCompare(a.run_id));
+    list.innerHTML = allRuns.map(r => `
+      <div class="run-row">
+        <div>
+          <div class="run-id">${esc(r._project)} / ${esc(r.run_id)}</div>
+          <div class="run-meta">${esc(r.current_phase || '')}</div>
+        </div>
+        <div>${badge(r.status)}</div>
+        <div class="run-meta">${r.completed_tasks}/${r.total_tasks} tasks &bull; $${(r.cumulative_spend_usd||0).toFixed(4)}</div>
+        <button class="btn-secondary btn-small" onclick="openMonitor('${esc(r._project)}','${esc(r.run_id)}')">Monitor</button>
+      </div>
+    `).join('');
+  } catch (err) {
+    list.innerHTML = `<div class="empty-state" style="color:var(--danger)">${esc(String(err))}</div>`;
+  }
 }
 
 async function loadRuns() {
