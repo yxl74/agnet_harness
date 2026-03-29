@@ -527,6 +527,30 @@ The projects directory is at: {projects_dir}
 """
 
 
+def _summarize_tool_use(tool_name: str, tool_input: dict) -> str:
+    """Create a human-readable summary of a tool invocation."""
+    if tool_name == "Glob":
+        pattern = tool_input.get("pattern", "")
+        return f"Scanning for files: {pattern}"
+    elif tool_name == "Read":
+        path = tool_input.get("file_path", "")
+        # Show just the filename, not the full path
+        short = path.rsplit("/", 1)[-1] if "/" in path else path
+        return f"Reading: {short}"
+    elif tool_name == "Grep":
+        pattern = tool_input.get("pattern", "")
+        return f"Searching for: {pattern}"
+    elif tool_name == "Write":
+        path = tool_input.get("file_path", "")
+        short = path.rsplit("/", 1)[-1] if "/" in path else path
+        return f"Writing: {short}"
+    elif tool_name == "Bash":
+        cmd = tool_input.get("command", "")
+        return f"Running: {cmd[:60]}{'...' if len(cmd) > 60 else ''}"
+    else:
+        return f"Using {tool_name}"
+
+
 async def _sdk_configure(
     websocket: WebSocket, description: str, sdk: Any,
     target_repo: str | None = None,
@@ -539,6 +563,8 @@ async def _sdk_configure(
         ResultMessage,
         SystemMessage,
         TextBlock,
+        ToolUseBlock,
+        ToolResultBlock,
     )
 
     projects_dir = _projects_dir()
@@ -581,6 +607,14 @@ async def _sdk_configure(
                         if isinstance(block, TextBlock) and block.text:
                             turn_output.append(block.text)
                             await websocket.send_json({"type": "message", "text": block.text})
+                        elif isinstance(block, ToolUseBlock):
+                            # Forward tool activity so the UI shows exploration progress
+                            tool_summary = _summarize_tool_use(block.name, block.input)
+                            await websocket.send_json({
+                                "type": "tool_activity",
+                                "tool": block.name,
+                                "summary": tool_summary,
+                            })
 
                 elif isinstance(message, ResultMessage):
                     if message.result:

@@ -188,6 +188,65 @@
     }
     #chat-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(77,148,255,.15); }
 
+    /* ── Activity Feed (exploration progress) ─── */
+    .activity-feed {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: .75rem 1rem;
+      max-height: 180px;
+      overflow-y: auto;
+      margin-bottom: .5rem;
+    }
+    .activity-feed-title {
+      font-family: var(--mono);
+      font-size: .7rem;
+      font-weight: 700;
+      color: var(--accent-2);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: .5rem;
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+    }
+    .activity-feed-title .pulse {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent-2);
+      animation: pulse-dot 1.5s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: .4; transform: scale(.7); }
+    }
+    .activity-item {
+      font-family: var(--mono);
+      font-size: .72rem;
+      color: var(--text-dim);
+      padding: .2rem 0;
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      animation: activity-in .2s ease-out;
+    }
+    @keyframes activity-in {
+      from { opacity: 0; transform: translateX(-8px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+    .activity-icon {
+      width: 16px;
+      text-align: center;
+      flex-shrink: 0;
+      font-size: .8rem;
+    }
+    .activity-icon.glob  { color: var(--accent); }
+    .activity-icon.read  { color: var(--accent-2); }
+    .activity-icon.grep  { color: var(--accent-3); }
+    .activity-icon.write { color: var(--success); }
+    .activity-icon.bash  { color: var(--text-dim); }
+
     /* ── Pipeline Visualization ───────────────── */
     .pipeline-panel {
       display: flex;
@@ -543,6 +602,13 @@
       <!-- Left: Chat -->
       <div class="config-chat-panel">
         <div style="font-family:var(--mono);font-size:.75rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:.5rem;">Configurator Chat</div>
+
+        <!-- Activity Feed: shows tool usage during exploration -->
+        <div class="activity-feed" id="activity-feed" style="display:none;">
+          <div class="activity-feed-title"><span class="pulse"></span> Exploring Codebase</div>
+          <div id="activity-items"></div>
+        </div>
+
         <div id="chat-box">
           <div class="chat-msg system">Describe your project to get started. The AI will interview you and build the configuration step by step.</div>
         </div>
@@ -916,7 +982,14 @@ function connectConfigurator(description) {
       const msg = JSON.parse(e.data);
       if (msg.type === 'message') {
         chatAppend(msg.text, 'agent');
+        // Hide activity feed once agent starts talking
+        if ($('#activity-feed').style.display !== 'none' && msg.text.length > 50) {
+          $('#activity-feed').style.display = 'none';
+        }
+      } else if (msg.type === 'tool_activity') {
+        addActivity(msg.tool, msg.summary);
       } else if (msg.type === 'done') {
+        $('#activity-feed').style.display = 'none';
         chatAppend(`Project '${msg.project_name}' created!`, 'done');
         wsReady = false;
         configuredProject = msg.project_name;
@@ -934,6 +1007,32 @@ function connectConfigurator(description) {
     // Auto-refresh pipeline on close
     if (configuredProject) loadPipelineForProject(configuredProject);
   });
+}
+
+const TOOL_ICONS = {
+  Glob: { icon: '\u{1F50D}', cls: 'glob' },    // magnifying glass
+  Read: { icon: '\u{1F4C4}', cls: 'read' },    // page
+  Grep: { icon: '\u{1F50E}', cls: 'grep' },    // search
+  Write: { icon: '\u{270F}', cls: 'write' },   // pencil
+  Bash: { icon: '\u{25B6}', cls: 'bash' },     // play
+};
+
+function addActivity(tool, summary) {
+  const feed = $('#activity-feed');
+  const items = $('#activity-items');
+
+  // Show feed if hidden
+  feed.style.display = '';
+
+  const info = TOOL_ICONS[tool] || { icon: '\u{2699}', cls: 'bash' };
+  const div = document.createElement('div');
+  div.className = 'activity-item';
+  div.innerHTML = `<span class="activity-icon ${info.cls}">${info.icon}</span> ${esc(summary)}`;
+  items.appendChild(div);
+
+  // Keep feed scrolled to bottom and cap at 30 items
+  feed.scrollTop = feed.scrollHeight;
+  while (items.children.length > 30) items.removeChild(items.firstChild);
 }
 
 function sendChatMessage(text) {
@@ -958,6 +1057,8 @@ $('#chat-reset-btn').addEventListener('click', () => {
   $('#chat-input').value = '';
   $('#pipeline-empty').style.display = '';
   $('#pipeline-content').style.display = 'none';
+  $('#activity-feed').style.display = 'none';
+  $('#activity-items').innerHTML = '';
   configuredProject = null;
 });
 
