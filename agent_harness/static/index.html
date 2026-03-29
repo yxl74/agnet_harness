@@ -973,6 +973,17 @@ async function loadPipelineForProject(name) {
 }
 
 function renderPipeline(config, prompts) {
+  try {
+    _renderPipelineInner(config, prompts);
+  } catch (err) {
+    console.error('renderPipeline error:', err, 'config:', config);
+    $('#pipeline-empty').innerHTML = `Render error: ${esc(String(err))}.<br>Check console for details.`;
+    $('#pipeline-empty').style.display = '';
+    $('#pipeline-content').style.display = 'none';
+  }
+}
+
+function _renderPipelineInner(config, prompts) {
   $('#pipeline-empty').style.display = 'none';
   $('#pipeline-content').style.display = '';
 
@@ -1029,7 +1040,9 @@ function renderPipeline(config, prompts) {
   flow.innerHTML = stages.map((s, i) => {
     const configured = prompts && prompts[s.key];
     const promptText = prompts?.[s.key] || '';
-    const toolsHtml = (s.tools || []).map(t => `<span class="tool-tag">${esc(t)}</span>`).join('');
+    const rawTools = s.tools;
+    const toolsList = Array.isArray(rawTools) ? rawTools : (typeof rawTools === 'string' ? rawTools.split(/[,\s]+/).filter(Boolean) : []);
+    const toolsHtml = toolsList.map(t => `<span class="tool-tag">${esc(t)}</span>`).join('');
 
     // MCP servers for evaluator
     let mcpHtml = '';
@@ -1041,11 +1054,13 @@ function renderPipeline(config, prompts) {
 
     // Evaluation dimensions inline for evaluator
     let dimsHtml = '';
-    if (s.dims && s.dims.length > 0) {
+    const dimsList = Array.isArray(s.dims) ? s.dims : [];
+    if (dimsList.length > 0) {
       dimsHtml = '<div class="dimensions-grid" style="margin-top:.65rem;">' +
-        s.dims.map(d => {
+        dimsList.map(d => {
           const sev = d.severity || 'blocking';
-          const checks = (d.checks || []).map(c => {
+          const checksArr = Array.isArray(d.checks) ? d.checks : [];
+          const checks = checksArr.map(c => {
             const ctype = c.check_type === 'metric' ? 'metric' : 'passfail';
             const label = c.check_type === 'metric' && c.threshold != null ? `${c.name} >= ${c.threshold}` : c.name;
             return `<div class="check-item"><span class="check-type ${ctype}">${c.check_type || 'pass/fail'}</span> ${esc(label)}: ${esc(c.description || '')}</div>`;
