@@ -244,6 +244,63 @@ async def get_run_state(name: str, run_id: str) -> JSONResponse:
     return JSONResponse(content=state)
 
 
+@app.get("/api/projects/{name}/runs/{run_id}/detail")
+async def get_run_detail(name: str, run_id: str) -> JSONResponse:
+    """Return full run detail: state + plan + per-task evaluations."""
+    projects_dir = _projects_dir()
+    run_dir = projects_dir / name / "runs" / run_id
+
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found.")
+
+    result: dict = {"run_id": run_id, "project": name}
+
+    # State
+    state_path = run_dir / "run_state.json"
+    if state_path.exists():
+        result["state"] = json.loads(state_path.read_text(encoding="utf-8"))
+
+    # Plan
+    plan_path = run_dir / "plan.json"
+    if plan_path.exists():
+        result["plan"] = json.loads(plan_path.read_text(encoding="utf-8"))
+
+    # Per-task evaluations and generations
+    tasks_dir = run_dir / "tasks"
+    tasks_detail: list[dict] = []
+    if tasks_dir.exists():
+        for task_dir in sorted(tasks_dir.iterdir()):
+            if not task_dir.is_dir():
+                continue
+            task_info: dict = {"dir_name": task_dir.name, "iterations": []}
+            # Collect all iteration artifacts
+            for eval_file in sorted(task_dir.glob("evaluation_iter*.json")):
+                try:
+                    ev = json.loads(eval_file.read_text(encoding="utf-8"))
+                    iter_num = eval_file.stem.replace("evaluation_iter", "")
+                    gen_file = task_dir / f"generation_iter{iter_num}.json"
+                    gen = json.loads(gen_file.read_text(encoding="utf-8")) if gen_file.exists() else None
+                    task_info["iterations"].append({
+                        "iteration": int(iter_num),
+                        "evaluation": ev,
+                        "generation": gen,
+                    })
+                except Exception:
+                    pass
+            tasks_detail.append(task_info)
+    result["tasks"] = tasks_detail
+
+    # Evaluation progress
+    progress_path = run_dir / "evaluation_progress.json"
+    if progress_path.exists():
+        try:
+            result["progress"] = json.loads(progress_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    return JSONResponse(content=result)
+
+
 # ---------------------------------------------------------------------------
 # Route: start a new run
 # ---------------------------------------------------------------------------
