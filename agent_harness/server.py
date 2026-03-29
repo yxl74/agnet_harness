@@ -317,6 +317,25 @@ async def configure_project(websocket: WebSocket) -> None:
     description: str = msg["description"]
     target_repo: str | None = msg.get("target_repo")
 
+    # Validate target_repo if provided
+    if target_repo:
+        repo_path = Path(target_repo)
+        if not repo_path.exists():
+            await websocket.send_json({
+                "type": "error",
+                "text": f"Target repo path does not exist: {target_repo}",
+            })
+            await websocket.close(code=1003)
+            return
+        if not repo_path.is_dir():
+            await websocket.send_json({
+                "type": "error",
+                "text": f"Target repo path is not a directory: {target_repo}",
+            })
+            await websocket.close(code=1003)
+            return
+        target_repo = str(repo_path.resolve())  # Normalize to absolute
+
     # Try to use the SDK; fall back to a stub configurator if unavailable
     try:
         import claude_agent_sdk as sdk  # type: ignore[import]
@@ -522,6 +541,8 @@ async def _sdk_configure(
     async with ClaudeSDKClient(options=options) as client:
         await client.query(user_message)
 
+        first_turn = True
+
         # Multi-turn conversation loop
         while True:
             turn_output: list[str] = []
@@ -539,6 +560,31 @@ async def _sdk_configure(
                         await websocket.send_json({"type": "message", "text": message.result})
 
             all_output.extend(turn_output)
+
+            # After the first turn with a target_repo, verify the agent
+            # actually explored the codebase before proceeding to questions.
+            if first_turn and target_repo:
+                first_turn = False
+                first_turn_text = "\n".join(turn_output).lower()
+                explored = any(
+                    signal in first_turn_text
+                    for signal in ["i see", "i found", "the codebase", "project structure",
+                                   "directory", "files", "explored", "repository"]
+                )
+                if not explored:
+                    # Agent skipped exploration — nudge it
+                    await websocket.send_json({
+                        "type": "message",
+                        "text": "[System: The configurator should explore the codebase before asking questions. Requesting exploration...]",
+                    })
+                    await client.query(
+                        "Before asking me questions, please explore the codebase first. "
+                        "Use Glob and Read to understand the project structure, tech stack, "
+                        "and existing patterns. Then summarize what you found."
+                    )
+                    continue
+            else:
+                first_turn = False
 
             # Check if the configurator is done
             full_text = "\n".join(all_output)
